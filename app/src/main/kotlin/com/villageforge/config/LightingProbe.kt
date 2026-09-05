@@ -7,6 +7,8 @@ import android.os.Looper
 import android.view.PixelCopy
 import android.view.SurfaceView
 import androidx.compose.runtime.mutableIntStateOf
+import kotlinx.coroutines.resume
+import kotlinx.coroutines.suspendCancellableCoroutine
 import java.io.File
 import java.io.FileOutputStream
 
@@ -33,21 +35,22 @@ object LightingProbe {
     lateinit var outputDir: File
 
     /**
-     * Copies the current SurfaceView content into probe_<label>.png.
+     * Copies the current SurfaceView content into surface_<label>.png.
      * Returns true on success. PixelCopy needs API 26+.
+     * NOTE: must be called from a coroutine on the main thread — the wait is
+     * suspending, never blocking (a blocking await would deadlock the very
+     * looper PixelCopy's callback needs).
      */
-    fun captureSurface(label: String): Boolean {
+    suspend fun captureSurface(label: String): Boolean {
         val sv = surfaceView ?: return false
         if (Build.VERSION.SDK_INT < 26 || sv.width == 0 || sv.height == 0) return false
         return try {
             val bmp = Bitmap.createBitmap(sv.width, sv.height, Bitmap.Config.ARGB_8888)
-            val done = java.util.concurrent.CountDownLatch(1)
-            var ok = false
-            PixelCopy.request(sv, bmp, { result ->
-                ok = result == PixelCopy.SUCCESS
-                done.countDown()
-            }, Handler(Looper.getMainLooper()))
-            done.await(2, java.util.concurrent.TimeUnit.SECONDS)
+            val ok = suspendCancellableCoroutine { cont ->
+                PixelCopy.request(sv, bmp, { result ->
+                    cont.resume(result == PixelCopy.SUCCESS)
+                }, Handler(Looper.getMainLooper()))
+            }
             if (ok) {
                 File(outputDir, "surface_$label.png").outputStream().use { out ->
                     bmp.compress(Bitmap.CompressFormat.PNG, 100, out)

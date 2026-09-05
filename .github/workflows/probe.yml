@@ -48,7 +48,7 @@ jobs:
             adb shell am start -W -n com.villageforge/.MainActivity
             sleep 10
             adb exec-out screencap -p > probe_screen.png
-            sleep 58
+            sleep 85
             adb root
             sleep 4
             adb pull /sdcard/Android/data/com.villageforge/files/probe surface_captures
