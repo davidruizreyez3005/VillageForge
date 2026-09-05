@@ -46,7 +46,7 @@ object LightingProbe {
         if (Build.VERSION.SDK_INT < 26 || sv.width == 0 || sv.height == 0) return false
         return try {
             val bmp = Bitmap.createBitmap(sv.width, sv.height, Bitmap.Config.ARGB_8888)
-            val ok = suspendCancellableCoroutine(onCancellation = null) { cont ->
+            val ok = suspendCancellableCoroutine { cont ->
                 PixelCopy.request(sv, bmp, { result ->
                     cont.resume(result == PixelCopy.SUCCESS)
                 }, Handler(Looper.getMainLooper()))
