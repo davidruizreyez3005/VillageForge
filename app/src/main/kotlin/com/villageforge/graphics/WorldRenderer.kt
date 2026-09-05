@@ -1,6 +1,7 @@
 package com.villageforge.graphics
 
 import com.google.android.filament.*
+import com.villageforge.config.LightingProbe
 import com.villageforge.config.PlayerConfig
 import com.villageforge.config.Theme
 import com.villageforge.config.WorldLayout
@@ -288,6 +289,17 @@ class WorldRenderer(private val engine: Engine, private val game: GameState) {
     fun onViewport(width: Int, height: Int) { cameraRig.setViewport(width, height) }
     fun onRockStruck(index: Int) { rockFlinch[index] = 1f }
     fun onPickUpgraded(tier: Int) { playerRig.setPickTint(tier) }
+
+    /** TEMPORARY lighting calibration probe. */
+    fun applyProbePreset(p: LightingProbe.Preset, toneMapping: (Boolean) -> Unit) {
+        engine.lightManager.setIntensity(sunEntity, p.sunLux)
+        indirectLight?.setIntensity(p.ambientLux)
+        cameraRig.setProbeExposure(p.aperture, p.shutter, p.iso)
+        toneMapping(p.linearToneMapping)
+        sky?.let { engine.destroySkybox(it) }
+        sky = Skybox.Builder().color(p.skyR, p.skyG, p.skyB, 1f).build(engine)
+        scene.skybox = sky
+    }
 
     fun update(deltaSeconds: Float) {
         cameraRig.update(deltaSeconds)

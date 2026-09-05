@@ -315,6 +315,11 @@ class CameraRig(private val engine: Engine) {
 
     fun setViewport(width: Int, height: Int) { viewportWidth = width; viewportHeight = height }
 
+    /** TEMPORARY lighting calibration probe. */
+    fun setProbeExposure(aperture: Float, shutter: Float, iso: Float) {
+        camera.setExposure(aperture, shutter, iso)
+    }
+
     fun panByPixels(dxPx: Float, dyPx: Float) {
         val worldPerPixel = 2f*zoom/viewportHeight
         val dx = dxPx*worldPerPixel; val dy = dyPx*worldPerPixel
@@ -448,6 +453,11 @@ class FilamentHost {
         this.world = world
         view.scene = world.scene
         view.camera = world.camera
+    }
+
+    /** TEMPORARY lighting calibration probe. */
+    fun setToneMapping(linear: Boolean) {
+        view.toneMapping = if (linear) View.ToneMapping.LINEAR else View.ToneMapping.ACES
     }
 
     fun onSurfaceAvailable(surface: Surface) {

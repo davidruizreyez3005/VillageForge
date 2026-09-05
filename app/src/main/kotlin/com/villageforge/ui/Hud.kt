@@ -42,6 +42,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.villageforge.config.Buildings
+import com.villageforge.config.LightingProbe
 import com.villageforge.config.Ore
 import com.villageforge.config.Picks
 import com.villageforge.config.Upgrades
@@ -128,6 +129,17 @@ fun HudScreen(game: GameState, bus: EventBus, rig: CameraRig, save: SaveManager)
         if (shopOpen) {
             Scrim { shopOpen = false }
             ShopSheet(game, coins, upgrades, { shopOpen = false }, Modifier.align(Alignment.BottomCenter))
+        }
+        if (LightingProbe.ENABLED && LightingProbe.activeIndex.intValue >= 0) {
+            val preset = LightingProbe.presets[LightingProbe.activeIndex.intValue]
+            BasicText(
+                "PROBE ${LightingProbe.activeIndex.intValue + 1}/8 ${preset.label}",
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .background(Color(0xCC000000), RoundedCornerShape(8.dp))
+                    .padding(horizontal = 14.dp, vertical = 8.dp),
+                style = TextStyle(color = Color(0xFFF1C40F), fontSize = 20.sp, fontWeight = FontWeight.Bold),
+            )
         }
         FloatingTexts(bus, rig)
     }

@@ -14,6 +14,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.lifecycle.lifecycleScope
 import com.villageforge.config.BuildInfo
+import com.villageforge.config.LightingProbe
 import com.villageforge.config.WorldLayout
 import com.villageforge.core.AudioManager
 import com.villageforge.core.CrashReport
@@ -131,6 +132,19 @@ class MainActivity : ComponentActivity() {
         }
 
         setContent { GameScreen(host, input, game, bus, world.cameraRig, save) }
+
+        if (LightingProbe.ENABLED) {
+            lifecycleScope.launch {
+                delay(LightingProbe.START_DELAY_MILLIS)
+                while (isActive) {
+                    for (i in LightingProbe.presets.indices) {
+                        world.applyProbePreset(LightingProbe.presets[i]) { linear -> host.setToneMapping(linear) }
+                        LightingProbe.activeIndex.intValue = i
+                        delay(LightingProbe.STEP_MILLIS)
+                    }
+                }
+            }
+        }
     }
 
     override fun onResume() {
