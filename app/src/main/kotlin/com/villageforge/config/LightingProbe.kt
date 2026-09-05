@@ -7,7 +7,7 @@ import android.os.Looper
 import android.view.PixelCopy
 import android.view.SurfaceView
 import androidx.compose.runtime.mutableIntStateOf
-import kotlinx.coroutines.resume
+import kotlin.coroutines.resume
 import kotlinx.coroutines.suspendCancellableCoroutine
 import java.io.File
 import java.io.FileOutputStream
@@ -46,7 +46,7 @@ object LightingProbe {
         if (Build.VERSION.SDK_INT < 26 || sv.width == 0 || sv.height == 0) return false
         return try {
             val bmp = Bitmap.createBitmap(sv.width, sv.height, Bitmap.Config.ARGB_8888)
-            val ok = suspendCancellableCoroutine { cont ->
+            val ok = suspendCancellableCoroutine(onCancellation = null) { cont ->
                 PixelCopy.request(sv, bmp, { result ->
                     cont.resume(result == PixelCopy.SUCCESS)
                 }, Handler(Looper.getMainLooper()))
