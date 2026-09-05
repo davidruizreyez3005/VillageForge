@@ -180,7 +180,9 @@ class WorldRenderer(private val engine: Engine, private val game: GameState) {
 
         val sh = FloatArray(27)
         sh[0] = Theme.AMBIENT_SKY.r; sh[1] = Theme.AMBIENT_SKY.g; sh[2] = Theme.AMBIENT_SKY.b
-        indirectLight = IndirectLight.Builder().irradiance(3, sh).build(engine)
+        // Explicit intensity: the default (30_000 lux) over-brightens the ambient
+        // fill; 3_000 keeps it as a subtle blue-tinted fill under the sun.
+        indirectLight = IndirectLight.Builder().irradiance(3, sh).intensity(3_000f).build(engine)
         scene.indirectLight = indirectLight
 
         sky = Skybox.Builder().color(Theme.SKY_COLOR.r, Theme.SKY_COLOR.g, Theme.SKY_COLOR.b, 1f).build(engine)
