@@ -4,20 +4,24 @@ A 3D idle-mining village game for Android, rendered with Google [Filament](https
 
 ## Features
 
-- Full 3D valley **and a gated north canyon** with procedurally generated terrain, cliffs, pines, and a torch-lit canyon gate
+- Full 3D valley, a gated north canyon, **and the Crystal Hollow** — a westward side-canyon full of glowing crystal clusters, a luminous monolith, an old mine entrance, and standing stones
 - **The Forge**: smelt ore into ingots in a queued furnace (it keeps pouring while you play or sleep), then hammer ingots into finished goods at the anvil
-- Mining loop: copper, tin, coal, and iron in the valley; **silver, gold, and crystal** in the canyon — each gated behind pick tiers
+- Mining loop: copper, tin, coal, and iron in the valley; **silver, gold, and crystal** in the canyon and hollow — each gated behind pick tiers
 - Economy: carry capacity, trading post (ore + ingots + goods), storage bin stockpiling
 - Upgrades: 7 pickaxe tiers (rusty → crystal), 7 boots levels, 6 backpack levels, storage bin, the forge itself
 - **Hired miners**: up to five hands that mine, haul to your stockpile, and keep earning offline
-- **Quest chain**: 12 objectives with coin rewards, plus a chronicle/stats screen
+- **Quest chain**: 13 objectives with coin rewards, plus a chronicle/stats screen
+- **Achievements**: 26 medals with progress bars, coin rewards, and unlock banners (v2.1)
+- **Music**: a procedural village soundtrack — music-box melody over a soft bass that calms down at night, toggleable from the HUD (v2.1)
+- **Save slots**: three separate villages on one device, picked from the title screen (v2.0 saves migrate to slot 1 automatically)
 - **Levels & XP** with level-up coin bonuses
-- **Day/night cycle**: warm dawns and dusks, torches and lanterns that light at night, a furnace fire that breathes
-- Animated blacksmith (walk, swing, idle bob) built from a 15-part procedural rig with hair, beard, boots, and a backpack that visibly fills with ore
+- **Day/night cycle**: warm dawns and dusks, bright moonlit nights, torches, lanterns, and crystals that light up after dark, a furnace fire that breathes
+- Animated blacksmith (walk, swing, idle bob) built from a 15-part procedural rig with hair, beard, boots, a growing ore backpack, and a full-size pickaxe that chops into the rock (v2.1 rig fix)
+- **Isometric camera**: locked 45° view, drag to pan, pinch to zoom; walkers follow valley trails between zones
 - Visual juice: rock debris on every strike, anvil sparks while crafting, chimney smoke while smelting, tap ripples
-- Title screen with rising embers and a loading flow
-- Procedural sound effects (mining, hammering, pouring, coins, fanfares) via a raw AudioTrack synth
-- Auto-saving to local JSON storage with atomic writes and v1 → v2 migration with offline progress
+- Title screen with rising embers, village slot picker, and a loading flow
+- Procedural sound effects (mining, hammering, pouring, coins, fanfares, medal chimes) via a raw AudioTrack synth
+- Auto-saving to local JSON storage with atomic writes and v1 → v2 → v3 migration with offline progress
 
 ## Tech stack
 
@@ -33,7 +37,7 @@ The APK is built automatically by GitHub Actions on every push to `main`.
 1. Open the repository → **Actions** → **Build APK**
 2. Wait for the run to finish (a few minutes)
 3. Download the **village-forge-apk** artifact from the run page
-4. Unzip it and sideload `VillageForge-v2.0.apk` onto any Android 7.0+ device
+4. Unzip it and sideload `VillageForge-v2.1.apk` onto any Android 7.0+ device
 
 To build locally:
 

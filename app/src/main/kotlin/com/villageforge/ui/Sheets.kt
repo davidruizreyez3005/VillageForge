@@ -17,15 +17,21 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.villageforge.config.AchievementDef
+import com.villageforge.config.Achievements
 import com.villageforge.config.Buildings
 import com.villageforge.config.Item
 import com.villageforge.config.Metal
@@ -506,3 +512,82 @@ private fun gainsSummary(gains: List<Int>, name: (Int) -> String): String =
     gains.mapIndexed { i, n -> if (n > 0) "${n} ${name(i)}" else null }
         .filterNotNull()
         .joinToString(" · ")
+
+// ---- Medals (v2.1) ---------------------------------------------------------
+
+@Composable
+fun BoxScope.MedalsSheet(game: GameState, onClose: () -> Unit) {
+    val unlockedCount by game.achievementFlow.collectAsState()
+    SheetShell("Medals — $unlockedCount/${Achievements.all.size}", onClose) {
+        val unlocked = unlockedCount  // snapshot trigger
+        val sorted = remember(unlocked) {
+            val done = Achievements.all.filter { it.id in game.achievements }
+            val todo = Achievements.all.filter { it.id !in game.achievements }
+            todo.sortedByDescending { Achievements.progress(game, it).toFloat() / it.goal } + done
+        }
+        for (def in sorted) {
+            MedalRow(def, def.id in game.achievements, Achievements.progress(game, def))
+            UpgradeDivider()
+        }
+        Spacer(Modifier.height(8.dp))
+    }
+}
+
+@Composable
+private fun MedalRow(def: AchievementDef, done: Boolean, progress: Int) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Box(
+            Modifier
+                .size(30.dp)
+                .background(Color(if (done) UiColors.EMBER else UiColors.PANEL_SUNK), CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            BasicText(
+                if (done) "🏆" else "★",
+                style = TextStyle(fontSize = if (done) 15.sp else 17.sp),
+                modifier = Modifier.graphicsLayer { alpha = if (done) 1f else 0.45f },
+            )
+        }
+        Spacer(Modifier.width(10.dp))
+        Column(Modifier.weight(1f)) {
+            BasicText(
+                def.title,
+                style = TextStyle(
+                    color = Color(if (done) UiColors.HEADER else UiColors.TEXT),
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold,
+                ),
+            )
+            BasicText(
+                def.desc,
+                style = TextStyle(color = Color(UiColors.DIM), fontSize = 11.sp),
+                modifier = Modifier.padding(top = 1.dp),
+            )
+            if (!done) {
+                Spacer(Modifier.height(5.dp))
+                ProgressBar(
+                    progress.toFloat() / def.goal.coerceAtLeast(1),
+                    UiColors.COIN,
+                )
+                Spacer(Modifier.height(3.dp))
+                BasicText(
+                    "$progress / ${def.goal}",
+                    style = TextStyle(color = Color(UiColors.DIM), fontSize = 10.sp),
+                )
+            }
+        }
+        Spacer(Modifier.width(10.dp))
+        Column(horizontalAlignment = Alignment.End) {
+            BasicText(
+                "+${def.reward} c",
+                style = TextStyle(color = Color(if (done) UiColors.COIN else UiColors.DIM), fontSize = 12.sp, fontWeight = FontWeight.Bold),
+            )
+            if (done) {
+                BasicText(
+                    "Earned",
+                    style = TextStyle(color = Color(UiColors.GOOD), fontSize = 10.sp, fontWeight = FontWeight.Bold),
+                )
+            }
+        }
+    }
+}

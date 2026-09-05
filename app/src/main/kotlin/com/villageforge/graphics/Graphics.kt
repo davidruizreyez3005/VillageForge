@@ -247,7 +247,7 @@ class AssetFactory(private val engine: Engine) {
 
     private fun buildTerrain(): List<Mesh> {
         val cell = WorldLayout.TERRAIN_CELL
-        val x0 = -WorldLayout.VALLEY_WIDTH / 2f
+        val x0 = WorldLayout.HOLLOW_X_MIN   // west edge of the Crystal Hollow
         val x1 = WorldLayout.VALLEY_WIDTH / 2f
         val z0 = WorldLayout.CANYON_Z_MIN - 1.5f
         val z1 = WorldLayout.VALLEY_Z_MAX
@@ -285,10 +285,10 @@ class AssetFactory(private val engine: Engine) {
             }
         }
         val vb = newVertexBuffer(positions, normals)
-        // The bounds must cover the whole strip down to the canyon floor.
+        // The bounds must cover the whole strip from the hollow to the canyon floor.
         val bounds = Box(
-            floatArrayOf(0f, 1.5f, (z0 + z1) / 2f),
-            floatArrayOf(WorldLayout.VALLEY_WIDTH / 2f + 2f, 8f, (z1 - z0) / 2f + 2f),
+            floatArrayOf((x0 + x1) / 2f, 1.5f, (z0 + z1) / 2f),
+            floatArrayOf((x1 - x0) / 2f + 2f, 8f, (z1 - z0) / 2f + 2f),
         )
         return variantIndices.map { idx ->
             registerMesh(vb, newIndexBuffer(idx), idx.size, bounds)
@@ -364,8 +364,9 @@ class AssetFactory(private val engine: Engine) {
 }
 
 /**
- * Orthographic orbit camera: pan, pinch zoom, and a two-finger yaw orbit.
- * Pitch is tied to zoom (closer = steeper view) for a nicer framing feel.
+ * Locked isometric camera: yaw and pitch are fixed at 45° so the world
+ * always reads as a classic isometric diorama. One-finger drag pans the
+ * view WITH the finger (the terrain slides the opposite way), pinch zooms.
  */
 class CameraRig(private val engine: Engine) {
     val camera: Camera
@@ -376,10 +377,8 @@ class CameraRig(private val engine: Engine) {
     private var targetFocusZ = focusZ
     private var zoom = 15f
     private var targetZoom = zoom
-    private var yaw = Math.toRadians(Theme.CAMERA_YAW_DEGREES.toDouble()).toFloat()
-    private var targetYaw = yaw
-    private var pitch = Math.toRadians(Theme.CAMERA_PITCH_DEGREES.toDouble()).toFloat()
-    private var targetPitch = pitch
+    private val yaw = Math.toRadians(Theme.CAMERA_YAW_DEGREES.toDouble()).toFloat()
+    private val pitch = Math.toRadians(Theme.CAMERA_PITCH_DEGREES.toDouble()).toFloat()
     private var viewportWidth = 1
     private var viewportHeight = 1
 
@@ -403,17 +402,12 @@ class CameraRig(private val engine: Engine) {
         val worldPerPixel = 2f*zoom/viewportHeight
         val dx = dxPx*worldPerPixel; val dy = dyPx*worldPerPixel
         val s = sin(yaw); val c = cos(yaw)
-        // Grab-style panning (Google-Maps convention): the world follows the
-        // finger. Screen-up on the ground is (-s, -c), screen-right is (c, -s);
-        // the focus moves OPPOSITE to the finger on both screen axes.
-        targetFocusX += -dx*c - dy*s
-        targetFocusZ +=  dx*s - dy*c
+        // Camera-attached panning: the focus follows the finger on screen, so
+        // dragging up pans the view north (the ground slides DOWN, opposite
+        // the finger) — the inverted feel requested for v2.1.
+        targetFocusX += dx*c + dy*s
+        targetFocusZ += -dx*s + dy*c
         clampFocus()
-    }
-
-    /** Two-finger orbit: positive degrees = clockwise on screen. */
-    fun rotateBy(deltaDegrees: Float) {
-        targetYaw += Math.toRadians(deltaDegrees.toDouble()).toFloat()
     }
 
     /** Pinch-out (factor > 1) must zoom IN, i.e. shrink the visible world span. */
@@ -422,15 +416,9 @@ class CameraRig(private val engine: Engine) {
     fun update(dt: Float) {
         val panLerp = 1f - exp(-12f*dt)
         val zoomLerp = 1f - exp(-10f*dt)
-        val yawLerp = 1f - exp(-9f*dt)
         focusX += (targetFocusX-focusX)*panLerp
         focusZ += (targetFocusZ-focusZ)*panLerp
         zoom += (targetZoom-zoom)*zoomLerp
-        yaw += (targetYaw-yaw)*yawLerp
-        // Closer view = higher pitch angle (more top-down).
-        val zoomNorm = ((36f - zoom) / 28f).coerceIn(0f, 1f)
-        targetPitch = Math.toRadians((24.0 + 18.0 * zoomNorm).toFloat().toDouble()).toFloat()
-        pitch += (targetPitch-pitch)*zoomLerp
         apply()
     }
 
@@ -450,8 +438,10 @@ class CameraRig(private val engine: Engine) {
     }
 
     private fun clampFocus() {
-        targetFocusX = targetFocusX.coerceIn(-22f, 22f)
-        targetFocusZ = targetFocusZ.coerceIn(-38f, 16f)
+        // X spans the hollow in the west through the valley's east rim; Z the
+        // canyon depth through the south meadow.
+        targetFocusX = targetFocusX.coerceIn(-42f, 24f)
+        targetFocusZ = targetFocusZ.coerceIn(-40f, 16f)
     }
 
     fun screenToGround(px: Float, py: Float): FloatArray {
@@ -471,8 +461,8 @@ class CameraRig(private val engine: Engine) {
         t = (WorldLayout.groundHeight(x,z)-pY)/fwdY
         x = pX+fwdX*t; z = pZ+fwdZ*t
         return floatArrayOf(
-            x.coerceIn(-WorldLayout.VALLEY_WIDTH/2f+1f, WorldLayout.VALLEY_WIDTH/2f-1f),
-            z.coerceIn(WorldLayout.CANYON_Z_MIN+1f, WorldLayout.VALLEY_Z_MAX-1f),
+            x.coerceIn(WorldLayout.PLAY_X_MIN, WorldLayout.PLAY_X_MAX),
+            z.coerceIn(WorldLayout.PLAY_Z_MIN, WorldLayout.PLAY_Z_MAX),
         )
     }
 

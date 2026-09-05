@@ -7,7 +7,7 @@ import kotlin.math.max
 import kotlin.math.pow
 
 object BuildInfo {
-    const val VERSION = "2.0"
+    const val VERSION = "2.1"
 }
 
 object Theme {
@@ -73,6 +73,14 @@ object Theme {
     val LANTERN_GLOW = Rgb(1.0f, 0.62f, 0.20f)
     val SMOKE = Rgb(0.55f, 0.55f, 0.58f)
 
+    // v2.1 — Crystal Hollow props.
+    val CRYSTAL_A = Rgb(0.42f, 0.85f, 0.88f)
+    val CRYSTAL_B = Rgb(0.62f, 0.55f, 0.92f)
+    val MONOLITH = Rgb(0.48f, 0.80f, 0.85f)
+    val MINE_TIMBER = Rgb(0.26f, 0.18f, 0.11f)
+    val MINE_DARK = Rgb(0.04f, 0.05f, 0.07f)
+    val STANDING_STONE = Rgb(0.30f, 0.34f, 0.30f)
+
     const val ROUGHNESS_TERRAIN = 0.95f
     const val ROUGHNESS_PROP = 0.80f
     const val ROUGHNESS_ORE = 0.55f
@@ -88,7 +96,7 @@ object Theme {
     val SKY_COLOR = Rgb(0.52f, 0.68f, 0.84f)
 
     const val CAMERA_YAW_DEGREES = 45f
-    const val CAMERA_PITCH_DEGREES = 32f
+    const val CAMERA_PITCH_DEGREES = 45f
 }
 
 /** Raw ore veins. The last three only exist in the north canyon. */
@@ -159,7 +167,7 @@ object PlayerConfig {
     const val TAPS_PER_SECOND_LIMIT = 8
     const val MINING_REACH = 2.2f
     const val SWING_SECONDS = 0.45f
-    const val IMPACT_FRACTION = 0.65f
+    const val IMPACT_FRACTION = 0.68f
     const val TURN_RATE = 9.0f
     const val WALK_PHASE_PER_UNIT = 3.5f
 }
@@ -215,13 +223,17 @@ object DayNight {
     const val DUSK_END = 0.80f
 
     const val DAY_SUN_LUX = 11_000f
-    const val NIGHT_SUN_LUX = 140f
+    const val NIGHT_SUN_LUX = 550f
     const val DAY_AMBIENT_LUX = 3_000f
-    const val NIGHT_AMBIENT_LUX = 420f
+    const val NIGHT_AMBIENT_LUX = 1_400f
+
+    /** Daylight fraction at deep night (moonlight floor) and at sunrise/sunset. */
+    const val MOONLIGHT = 0.24f
+    const val GOLDEN = 0.55f
 
     val DAY_SKY = Theme.Rgb(0.52f, 0.68f, 0.84f)
     val DUSK_SKY = Theme.Rgb(0.84f, 0.48f, 0.34f)
-    val NIGHT_SKY = Theme.Rgb(0.04f, 0.06f, 0.12f)
+    val NIGHT_SKY = Theme.Rgb(0.09f, 0.12f, 0.21f)
     val DAY_SUN = Theme.Rgb(1.0f, 0.95f, 0.86f)
     val DUSK_SUN = Theme.Rgb(1.0f, 0.52f, 0.22f)
     val NIGHT_SUN = Theme.Rgb(0.36f, 0.46f, 0.70f)
@@ -249,6 +261,24 @@ object WorldLayout {
     const val PASS_Z_MAX = -19f
     const val NORTH_Z = VALLEY_Z_MIN
     const val TERRAIN_CELL = 1.5f
+
+    // v2.1 — the Crystal Hollow: a westward side-canyon full of crystal veins.
+    const val HOLLOW_X_MIN = -54f
+    const val HOLLOW_X_MAX = -33f
+    const val HOLLOW_Z_MIN = -45f
+    const val HOLLOW_Z_MAX = -29f
+    const val LINK_X_MIN = -33f
+    const val LINK_X_MAX = -13f
+    const val LINK_Z_MIN = -43.5f
+    const val LINK_Z_MAX = -34f
+    const val MONOLITH_X = -48.5f
+    const val MONOLITH_Z = -41.5f
+
+    /** Playable ground spans used by camera clamps and tap projection. */
+    const val PLAY_X_MIN = HOLLOW_X_MIN + 1f
+    const val PLAY_X_MAX = VALLEY_WIDTH / 2f - 1f
+    const val PLAY_Z_MIN = CANYON_Z_MIN + 1f
+    const val PLAY_Z_MAX = VALLEY_Z_MAX - 1f
 
     const val SPAWN_X = 0f
     const val SPAWN_Z = 10f
@@ -281,6 +311,15 @@ object WorldLayout {
         RockSpawn(Ore.GOLD, -9f, -36f), RockSpawn(Ore.GOLD, 0f, -41f),
         RockSpawn(Ore.GOLD, 7f, -37f),
         RockSpawn(Ore.CRYSTAL, -5f, -42f), RockSpawn(Ore.CRYSTAL, 10f, -34f),
+        // Crystal Hollow (v2.1) — deep west of the canyon
+        RockSpawn(Ore.SILVER, -35f, -31.5f),
+        RockSpawn(Ore.GOLD, -36.5f, -38f),
+        RockSpawn(Ore.CRYSTAL, -40f, -42.5f),
+        RockSpawn(Ore.CRYSTAL, -44f, -33f),
+        RockSpawn(Ore.CRYSTAL, -48f, -38f),
+        RockSpawn(Ore.CRYSTAL, -50.5f, -31.5f),
+        RockSpawn(Ore.GOLD, -52f, -43f),
+        RockSpawn(Ore.CRYSTAL, -51.5f, -35.5f),
     )
 
     const val TREE_COUNT = 44
@@ -290,6 +329,21 @@ object WorldLayout {
     val canyonPines: List<Pair<Float, Float>> = listOf(
         -11f to -27f, 11.5f to -27.5f, -9f to -34f, 10.5f to -40f,
         -11.5f to -42f, 4f to -44f, 11f to -44f, -4f to -26.5f, 8f to -31f,
+    )
+
+    /** Glowing crystal clusters scattered around the hollow floor and walls. */
+    val crystalClusters: List<Triple<Float, Float, Float>> = listOf(
+        Triple(-36.0f, -31.0f, 0.9f), Triple(-38.5f, -43.5f, 1.1f),
+        Triple(-42.5f, -36.0f, 0.8f), Triple(-45.5f, -43.8f, 1.3f),
+        Triple(-49.0f, -33.0f, 1.0f), Triple(-51.0f, -38.5f, 0.9f),
+        Triple(-53.5f, -43.5f, 1.2f), Triple(-53.0f, -30.5f, 0.8f),
+        Triple(-41.0f, -29.5f, 0.7f), Triple(-35.5f, -40.5f, 1.0f),
+    )
+
+    /** Weathered standing stones ringing the hollow. */
+    val standingStones: List<Triple<Float, Float, Float>> = listOf(
+        Triple(-37.5f, -34.5f, 1.9f), Triple(-44.5f, -31.0f, 2.3f),
+        Triple(-50.0f, -41.0f, 2.1f),
     )
 
     val trees: List<Pair<Float, Float>> by lazy {
@@ -326,10 +380,18 @@ object WorldLayout {
     fun corridorOutsideDistance(x: Float, z: Float): Float = minOf(
         rectOutside(x, z, -CANYON_HALF_W, CANYON_HALF_W, CANYON_Z_MIN, CANYON_Z_MAX),
         rectOutside(x, z, -PASS_HALF_W, PASS_HALF_W, PASS_Z_MIN, PASS_Z_MAX),
+        rectOutside(x, z, HOLLOW_X_MIN, HOLLOW_X_MAX, HOLLOW_Z_MIN, HOLLOW_Z_MAX),
+        rectOutside(x, z, LINK_X_MIN, LINK_X_MAX, LINK_Z_MIN, LINK_Z_MAX),
     )
 
+    fun inHollowZone(x: Float, z: Float): Boolean =
+        x > HOLLOW_X_MIN - 1.5f && x < HOLLOW_X_MAX + 1.5f && z > HOLLOW_Z_MIN - 1.5f && z < HOLLOW_Z_MAX + 1.5f
+
+    private fun inLinkZone(x: Float, z: Float): Boolean =
+        x > LINK_X_MIN - 1.5f && x < LINK_X_MAX + 1.5f && z > LINK_Z_MIN - 1.5f && z < LINK_Z_MAX + 1.5f
+
     fun inCanyonZone(x: Float, z: Float): Boolean =
-        z < PASS_Z_MAX + 1f && abs(x) < CANYON_HALF_W + 2.5f
+        (z < PASS_Z_MAX + 1f && abs(x) < CANYON_HALF_W + 2.5f) || inHollowZone(x, z) || inLinkZone(x, z)
 
     fun groundHeight(x: Float, z: Float): Float {
         var h = noise(x / 9f, z / 9f, 3.7f) * 0.45f
@@ -345,11 +407,69 @@ object WorldLayout {
             val edgeN = if (z < VALLEY_Z_MIN) (VALLEY_Z_MIN - z) / 10f else 0f
             h += (edgeX * edgeX + edgeS * edgeS + edgeN * edgeN) * 1.6f
         }
-        // Rockier floor detail inside the canyon proper.
-        if (z < CANYON_Z_MAX + 1f && abs(x) < CANYON_HALF_W - 1f && d <= 0.5f) {
+        // Rockier floor detail inside the canyon and hollow proper.
+        if (d <= 0.5f && (z < CANYON_Z_MAX + 1f && abs(x) < CANYON_HALF_W - 1f || inHollowZone(x, z))) {
             h += noise(x / 4f, z / 4f, 9.1f) * 0.30f
         }
         return h
+    }
+
+    // ---- Zone routing (v2.1) -------------------------------------------------
+
+    private const val ZONE_VALLEY = 0
+    private const val ZONE_CANYON = 1
+    private const val ZONE_LINK = 2
+    private const val ZONE_HOLLOW = 3
+
+    /** 0 valley, 1 main canyon, 2 link corridor, 3 crystal hollow. */
+    fun zoneOf(x: Float, z: Float): Int = when {
+        inHollowZone(x, z) -> ZONE_HOLLOW
+        inLinkZone(x, z) -> ZONE_LINK
+        z < PASS_Z_MAX + 1f && abs(x) < CANYON_HALF_W + 1f -> ZONE_CANYON
+        else -> ZONE_VALLEY
+    }
+
+    private val LINK_WEST_MOUTH = -31f to -38.5f
+    private val LINK_EAST_MOUTH = -17f to -38.5f
+
+    /**
+     * Waypoints that keep walkers on the valley-pass-canyon-hollow trails
+     * instead of trudging over cliff walls. Returns an EMPTY list when the
+     * straight line already works (same zone).
+     */
+    fun routeTo(fromX: Float, fromZ: Float, toX: Float, toZ: Float): List<Pair<Float, Float>> {
+        val from = zoneOf(fromX, fromZ)
+        val to = zoneOf(toX, toZ)
+        if (from == to) return emptyList()
+        val legs = ArrayList<Pair<Float, Float>>(4)
+        val px = toX.coerceIn(-4.5f, 4.5f)  // bias the pass crossing toward the destination
+        when (from) {
+            ZONE_VALLEY -> when (to) {
+                ZONE_CANYON -> { legs.add(px to -21.5f); legs.add(px to -26.5f) }
+                ZONE_LINK, ZONE_HOLLOW -> {
+                    legs.add(px to -21.5f); legs.add(px to -26.5f)
+                    legs.add(LINK_EAST_MOUTH); legs.add(LINK_WEST_MOUTH)
+                }
+            }
+            ZONE_CANYON -> when (to) {
+                ZONE_VALLEY -> legs.add(px to -21.5f)
+                ZONE_LINK, ZONE_HOLLOW -> { legs.add(LINK_EAST_MOUTH); legs.add(LINK_WEST_MOUTH) }
+            }
+            ZONE_LINK -> when (to) {
+                ZONE_VALLEY -> { legs.add(LINK_EAST_MOUTH); legs.add(px to -26.5f); legs.add(px to -21.5f) }
+                ZONE_CANYON -> legs.add(LINK_EAST_MOUTH)
+                ZONE_HOLLOW -> legs.add(LINK_WEST_MOUTH)
+            }
+            ZONE_HOLLOW -> when (to) {
+                ZONE_VALLEY -> {
+                    legs.add(LINK_WEST_MOUTH); legs.add(LINK_EAST_MOUTH)
+                    legs.add(px to -26.5f); legs.add(px to -21.5f)
+                }
+                ZONE_CANYON -> { legs.add(LINK_WEST_MOUTH); legs.add(LINK_EAST_MOUTH) }
+                ZONE_LINK -> legs.add(LINK_WEST_MOUTH)
+            }
+        }
+        return legs
     }
 
     fun noise(x: Float, z: Float, seed: Float): Float {

@@ -39,11 +39,42 @@ class Player {
     private var targetX = Float.NaN
     private var targetZ = Float.NaN
 
-    val isMoving: Boolean get() = !targetX.isNaN()
+    /** Route legs queued by [setRoute]; walked one at a time before the final goal. */
+    private val routeLegs = ArrayDeque<Pair<Float, Float>>()
+    private var finalX = Float.NaN
+    private var finalZ = Float.NaN
 
-    fun setTarget(x: Float, z: Float) { targetX = x; targetZ = z }
+    /** Moving now, or mid-route between legs (never flickers false between waypoints). */
+    val isMoving: Boolean get() = !targetX.isNaN() || routeLegs.isNotEmpty() || !finalX.isNaN()
 
-    fun clearTarget() { targetX = Float.NaN; targetZ = Float.NaN }
+    fun setTarget(x: Float, z: Float) {
+        routeLegs.clear()
+        finalX = Float.NaN; finalZ = Float.NaN
+        targetX = x; targetZ = z
+    }
+
+    /** Walks `legs` first, then settles at the final goal — keeps walkers on trails. */
+    fun setRoute(legs: List<Pair<Float, Float>>, goalX: Float, goalZ: Float) {
+        routeLegs.clear()
+        routeLegs.addAll(legs)
+        finalX = goalX; finalZ = goalZ
+        if (routeLegs.isEmpty()) { targetX = goalX; targetZ = goalZ }
+        else {
+            val first = routeLegs.removeFirst()
+            targetX = first.first; targetZ = first.second
+        }
+    }
+
+    /** Walks the direct line unless the zones call for trail waypoints. */
+    fun setRoutedTarget(goalX: Float, goalZ: Float) {
+        setRoute(com.villageforge.config.WorldLayout.routeTo(x, z, goalX, goalZ), goalX, goalZ)
+    }
+
+    fun clearTarget() {
+        targetX = Float.NaN; targetZ = Float.NaN
+        routeLegs.clear()
+        finalX = Float.NaN; finalZ = Float.NaN
+    }
 
     fun distanceTo(px: Float, pz: Float): Float = hypot(px - x, pz - z)
 
@@ -56,17 +87,29 @@ class Player {
             return
         }
 
-        if (targetX.isNaN()) { animState = AnimState.IDLE; return }
+        if (targetX.isNaN()) {
+            // A finished leg may hand off to the next one or the final goal.
+            val nextLeg = routeLegs.removeFirstOrNull()
+            if (nextLeg != null) {
+                targetX = nextLeg.first; targetZ = nextLeg.second
+            } else if (!finalX.isNaN()) {
+                targetX = finalX; targetZ = finalZ
+                finalX = Float.NaN; finalZ = Float.NaN
+            } else {
+                animState = AnimState.IDLE
+                return
+            }
+        }
 
         val dx = targetX - x
         val dz = targetZ - z
         val d = hypot(dx, dz)
-        if (d < 0.05f) { clearTarget(); animState = AnimState.IDLE; return }
+        if (d < 0.05f) { targetX = Float.NaN; targetZ = Float.NaN; return }  // leg done; next tick continues the route
 
         faceToward(targetX, targetZ, dt)
         val speed = PlayerConfig.MOVE_SPEED + moveSpeedBonus
         val step = speed * dt
-        if (step >= d) { x = targetX; z = targetZ; clearTarget() }
+        if (step >= d) { x = targetX; z = targetZ; targetX = Float.NaN; targetZ = Float.NaN }
         else { x += dx / d * step; z += dz / d * step }
         walkPhase += step * PlayerConfig.WALK_PHASE_PER_UNIT
         animState = AnimState.WALK

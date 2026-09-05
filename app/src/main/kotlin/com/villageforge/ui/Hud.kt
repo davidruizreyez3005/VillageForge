@@ -67,7 +67,8 @@ fun GameScreen(
     save: SaveManager,
     phase: UiPhase,
     onPhaseChange: (UiPhase) -> Unit,
-    onReset: () -> Unit,
+    onChooseSlot: (Int) -> Unit,
+    onDeleteSlot: (Int) -> Unit,
 ) {
     Box(Modifier.fillMaxSize()) {
         AndroidView(
@@ -85,7 +86,10 @@ fun GameScreen(
             },
         )
         when (phase) {
-            UiPhase.TITLE -> TitleScreen(save.hasSave(), onPlay = { onPhaseChange(UiPhase.LOADING) }, onReset = onReset)
+            UiPhase.TITLE -> {
+                val slots by save.slotsFlow.collectAsState()
+                TitleScreen(slots, onChooseSlot, onDeleteSlot)
+            }
             UiPhase.LOADING -> {
                 LoadingOverlay()
                 LaunchedEffect(host) {
@@ -119,6 +123,7 @@ fun HudScreen(game: GameState, bus: EventBus, rig: CameraRig, save: SaveManager)
     val level by game.levelFlow.collectAsState()
     val miners by game.minerFlow.collectAsState()
     val time by game.timeFlow.collectAsState()
+    val musicOn by game.musicFlow.collectAsState()
     val saveBroken by save.persistenceWarning.collectAsState()
 
     var sheet by remember { mutableStateOf<Sheet?>(null) }
@@ -137,8 +142,12 @@ fun HudScreen(game: GameState, bus: EventBus, rig: CameraRig, save: SaveManager)
             level = level,
             time = time,
             soundOn = soundOn,
+            musicOn = musicOn,
             onToggleSound = { game.enqueue(GameState.Command.ToggleSound) },
+            onToggleMusic = { game.enqueue(GameState.Command.ToggleMusic) },
         )
+
+        AchievementBanner(bus, Modifier.align(Alignment.TopCenter))
 
         if (saveBroken) {
             BasicText(
@@ -165,6 +174,7 @@ fun HudScreen(game: GameState, bus: EventBus, rig: CameraRig, save: SaveManager)
         when (sheet) {
             Sheet.SHOP -> ShopSheet(game, coins, binOwned, upgrades, miners, { sheet = null })
             Sheet.FORGE -> ForgeSheet(game, coins, forge, ingots, items, carry, stock, { sheet = null })
+            Sheet.MEDALS -> MedalsSheet(game, { sheet = null })
             Sheet.QUESTS -> QuestSheet(
                 quest,
                 StatsView(
@@ -207,7 +217,16 @@ fun HudScreen(game: GameState, bus: EventBus, rig: CameraRig, save: SaveManager)
 // ---- Top bar ---------------------------------------------------------------
 
 @Composable
-private fun TopBar(modifier: Modifier, coins: Int, level: GameState.LevelSnapshot, time: Float, soundOn: Boolean, onToggleSound: () -> Unit) {
+private fun TopBar(
+    modifier: Modifier,
+    coins: Int,
+    level: GameState.LevelSnapshot,
+    time: Float,
+    soundOn: Boolean,
+    musicOn: Boolean,
+    onToggleSound: () -> Unit,
+    onToggleMusic: () -> Unit,
+) {
     Row(
         modifier
             .windowInsetsPadding(WindowInsets.safeDrawing)
@@ -253,6 +272,15 @@ private fun TopBar(modifier: Modifier, coins: Int, level: GameState.LevelSnapsho
         }
         Spacer(Modifier.weight(1f))
         TimeChip(time)
+        Spacer(Modifier.width(8.dp))
+        Box(
+            Modifier
+                .background(Color(UiColors.PANEL), RoundedCornerShape(10.dp))
+                .clickable { onToggleMusic() }
+                .padding(horizontal = 10.dp, vertical = 8.dp)
+        ) {
+            BasicText("♪", style = TextStyle(color = Color(if (musicOn) UiColors.EMBER else UiColors.DIM), fontSize = 15.sp, fontWeight = FontWeight.Bold))
+        }
         Spacer(Modifier.width(8.dp))
         Box(
             Modifier
@@ -307,6 +335,8 @@ private fun BottomBar(anyOpen: Boolean, onSelect: (Sheet) -> Unit, modifier: Mod
         BarButton("🛒", "Shop", anyOpen) { onSelect(Sheet.SHOP) }
         Spacer(Modifier.width(8.dp))
         BarButton("📜", "Quests", anyOpen) { onSelect(Sheet.QUESTS) }
+        Spacer(Modifier.width(8.dp))
+        BarButton("🏆", "Medals", anyOpen) { onSelect(Sheet.MEDALS) }
     }
 }
 
@@ -540,3 +570,50 @@ private data class RippleItem(val id: Long, val x: Float, val y: Float)
 
 private const val FLOAT_LIFETIME_NANOS = 900_000_000L
 private const val RIPPLE_LIFETIME_NANOS = 450_000_000L
+
+// ---- Achievement banner (v2.1) ------------------------------------------------
+
+/** Gold ribbon that slides under the top bar whenever a medal lands. */
+@Composable
+private fun AchievementBanner(bus: EventBus, modifier: Modifier) {
+    var current by remember { mutableStateOf<EventBus.AchievementUnlocked?>(null) }
+    LaunchedEffect(bus) {
+        bus.achievementUnlocked.collect { unlocked -> current = unlocked }
+    }
+    val event = current ?: return
+    var age by remember { mutableFloatStateOf(0f) }
+    LaunchedEffect(event) {
+        val start = withFrameNanos { it }
+        while (true) {
+            val now = withFrameNanos { it }
+            age = (now - start) * 1e-9f
+            if (age >= 3.6f) { current = null; break }
+        }
+    }
+    val slideIn = (age / 0.30f).coerceIn(0f, 1f)
+    val fadeOut = ((3.6f - age) / 0.5f).coerceIn(0f, 1f)
+    val dy = (1f - slideIn) * -46f
+    Row(
+        modifier
+            .windowInsetsPadding(WindowInsets.safeDrawing)
+            .padding(top = 58.dp)
+            .offset { IntOffset(0, dy.roundToInt()) }
+            .graphicsLayer { alpha = minOf(slideIn, fadeOut) }
+            .background(Color(0xE6241B12), RoundedCornerShape(12.dp))
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        BasicText("🏆", style = TextStyle(fontSize = 18.sp))
+        Spacer(Modifier.width(10.dp))
+        Column {
+            BasicText(
+                "Medal earned — ${event.title}",
+                style = TextStyle(color = Color(UiColors.HEADER), fontSize = 14.sp, fontWeight = FontWeight.Bold),
+            )
+            BasicText(
+                "+${event.reward} coins",
+                style = TextStyle(color = Color(UiColors.COIN), fontSize = 12.sp, fontWeight = FontWeight.Bold),
+            )
+        }
+    }
+}

@@ -33,13 +33,13 @@ jobs:
       - name: Stage APK
         run: |
           mkdir -p dist
-          cp app/build/outputs/apk/release/app-release.apk dist/VillageForge-v2.0.apk
+          cp app/build/outputs/apk/release/app-release.apk dist/VillageForge-v2.1.apk
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: village-forge-apk
-          path: dist/VillageForge-v2.0.apk
+          path: dist/VillageForge-v2.1.apk
           retention-days: 30
           if-no-files-found: error
 
@@ -69,7 +69,7 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           disable-animations: true
           script: |
-            adb install -r dist/VillageForge-v2.0.apk
+            adb install -r dist/VillageForge-v2.1.apk
             adb logcat -c
             # phase=game fast-forwards past the title screen so the smoke test
             # exercises the live 3D world and HUD directly.
@@ -115,23 +115,21 @@ jobs:
           name: village-forge-apk
           path: dist
 
-      - name: Publish to GitHub Releases (tag v2.0)
+      - name: Publish to GitHub Releases (tag v2.1)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create v2.0 dist/VillageForge-v2.0.apk \
-            --title "Village Forge v2.0 — The Forge Update" \
-            --notes "The blacksmith's workshop is open. Build the furnace, smelt ore into ingots, and hammer out goods worth far more than raw stone.
+          gh release create v2.1 dist/VillageForge-v2.1.apk \
+            --title "Village Forge v2.1 — The Hollow Update" \
+            --notes "The valley lights up and the west trail is open.
 
-          New in v2.0:
-          - The Forge: a full smelt-and-craft chain — furnace queue, anvil hammering with sparks and smoke, six ingots, seven craftable goods
-          - North Canyon: a new gated mining area with silver, gold, and crystal veins
-          - Hired Miners: up to five hands that keep working (and keep earning) while you're away
-          - Quests: a twelve-step objective chain with coin rewards, plus a chronicle/stats screen
-          - Levels & XP: earn XP for everything you do, with level-up bonuses
-          - Day/night cycle with dawn/dusk skies, torches, and a glowing forge at night
-          - Redesigned HUD: top bar with coins/level/time, bottom action bar, recipe-card forge sheet
-          - Title screen and loading flow, tap ripples, rock debris particles
-          - Two-finger camera orbit, smoother zoom with pitch, upgraded character models (hair, beard, boots, ore sack) and richer walk animations
-          - Economy rebalance: cheaper mid-tier picks, smoother progression to the new Crystal Pick" \
-            || gh release upload v2.0 dist/VillageForge-v2.0.apk --clobber
+          New in v2.1:
+          - Crystal Hollow: a new mining area west of the canyon — follow the lanterns, mine crystal-rich veins, and find the glowing monolith, old mine entrance, and standing stones
+          - Achievements: 26 medals with coin rewards, a medals panel, and unlock banners
+          - Music: a procedural village soundtrack (music-box melody + bass) that calms down at night, with a HUD toggle
+          - Save slots: three villages on one device — pick, play, and delete from the title screen (old saves migrate to slot 1)
+          - Camera rework: locked 45-degree isometric view, drag to pan (now the world moves opposite your finger), pinch to zoom
+          - Fixed the pitch-black dawn/dusk crash: smooth daylight curve and bright moonlit nights
+          - Fixed the pickaxe swing: a proper overhead chop that lands in front of the smith, with a full-size pick and visible boots
+          - New quest: The West Trail; walkers now follow valley trails instead of trudging over cliff walls" \
+            || gh release upload v2.1 dist/VillageForge-v2.1.apk --clobber

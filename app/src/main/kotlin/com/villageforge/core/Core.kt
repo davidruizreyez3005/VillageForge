@@ -13,7 +13,6 @@ import com.villageforge.config.WorldLayout
 import com.villageforge.graphics.CameraRig
 import com.villageforge.state.GameState
 import java.io.File
-import kotlin.math.atan2
 import kotlin.math.hypot
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.channels.BufferOverflow
@@ -21,9 +20,9 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
-enum class SfxId { ROCK_HIT, ROCK_BREAK, COINS, BUY, DENIED, SMELT, HAMMER, CRAFT, QUEST, LEVELUP }
+enum class SfxId { ROCK_HIT, ROCK_BREAK, COINS, BUY, DENIED, SMELT, HAMMER, CRAFT, QUEST, LEVELUP, ACHIEVE }
 
-enum class Sheet { FORGE, SHOP, QUESTS }
+enum class Sheet { FORGE, SHOP, QUESTS, MEDALS }
 
 class EventBus {
     data class OreMined(val ore: com.villageforge.config.Ore, val amount: Int, val x: Float, val z: Float)
@@ -37,6 +36,7 @@ class EventBus {
     data class LevelUp(val newLevel: Int)
     data class TapMarker(val x: Float, val y: Float)
     data class UiRequest(val sheet: Sheet)
+    data class AchievementUnlocked(val id: String, val title: String, val reward: Int)
 
     val oreMined = MutableSharedFlow<OreMined>(extraBufferCapacity = 16, onBufferOverflow = BufferOverflow.DROP_OLDEST)
     val rockStruck = MutableSharedFlow<RockStruck>(extraBufferCapacity = 16, onBufferOverflow = BufferOverflow.DROP_OLDEST)
@@ -49,6 +49,7 @@ class EventBus {
     val levelUp = MutableSharedFlow<LevelUp>(extraBufferCapacity = 4, onBufferOverflow = BufferOverflow.DROP_OLDEST)
     val tapMarker = MutableSharedFlow<TapMarker>(extraBufferCapacity = 8, onBufferOverflow = BufferOverflow.DROP_OLDEST)
     val uiRequest = MutableSharedFlow<UiRequest>(extraBufferCapacity = 4, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+    val achievementUnlocked = MutableSharedFlow<AchievementUnlocked>(extraBufferCapacity = 4, onBufferOverflow = BufferOverflow.DROP_OLDEST)
 
     companion object {
         val COLOR_WARN: Int = 0xFFE2574C.toInt()
@@ -67,10 +68,6 @@ class InputManager(
     private val scaleDetector: ScaleGestureDetector
     private val tapTimes = LongArray(PlayerConfig.TAPS_PER_SECOND_LIMIT)
     private var tapTimesIndex = 0
-
-    // Two-finger orbit tracking
-    private var rotating = false
-    private var lastRotationAngle = 0f
 
     private val panDetector = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
         override fun onDown(event: MotionEvent): Boolean = true
@@ -95,35 +92,12 @@ class InputManager(
 
     override fun onTouch(view: View, event: MotionEvent): Boolean {
         scaleDetector.onTouchEvent(event)
-        when (event.actionMasked) {
-            MotionEvent.ACTION_POINTER_DOWN -> if (event.pointerCount == 2) {
-                rotating = true
-                lastRotationAngle = angleBetween(event)
-            }
-            MotionEvent.ACTION_POINTER_UP -> if (event.pointerCount <= 2) {
-                rotating = false
-            }
-            MotionEvent.ACTION_MOVE -> if (rotating && event.pointerCount >= 2) {
-                val a = angleBetween(event)
-                var delta = Math.toDegrees((a - lastRotationAngle).toDouble())
-                while (delta > 180.0) delta -= 360.0
-                while (delta < -180.0) delta += 360.0
-                rig.rotateBy(delta.toFloat())
-                lastRotationAngle = a
-            }
-        }
         // Feed the pan/tap detector only single-pointer streams so the
-        // two-finger orbit never pans the world mid-gesture.
+        // pinch zoom never pans the world mid-gesture.
         if (event.pointerCount == 1 || event.actionMasked == MotionEvent.ACTION_DOWN) {
             panDetector.onTouchEvent(event)
         }
         return true
-    }
-
-    private fun angleBetween(event: MotionEvent): Float {
-        val dx = event.getX(1) - event.getX(0)
-        val dy = event.getY(1) - event.getY(0)
-        return atan2(dy, dx)
     }
 
     private fun handleTap(x: Float, y: Float, eventTime: Long) {
@@ -199,27 +173,104 @@ class SaveManager(context: Context) {
         val statsIngotsSmelted: List<Int> = emptyList(),
         val statsItemsCrafted: List<Int> = emptyList(),
         val statsPlaySeconds: Float = 0f,
+        // v3 additions (2.1)
+        val musicEnabled: Boolean = true,
+        val achievements: List<String> = emptyList(),
+        val statsRocksBroken: Int = 0,
+        val statsOfflineGains: Int = 0,
+        val statsNightSeconds: Float = 0f,
+    )
+
+    /** What one slot row shows in the village picker. */
+    data class SlotSummary(
+        val slot: Int,
+        val level: Int,
+        val coins: Int,
+        val playSeconds: Float,
+        val lastPlayedMs: Long,
+        val miners: Int,
+        val questIndex: Int,
     )
 
     val persistenceWarning = MutableStateFlow(false)
+    /** Live slot overview for the title screen; null = empty slot. */
+    val slotsFlow = MutableStateFlow(List(SLOT_COUNT) { null as SlotSummary? })
     /** Set by load() so the caller can compute offline progress. */
     var lastPlayedEpochMs: Long = 0L
         private set
 
-    private val file = File(context.filesDir, "villageforge_save.json")
+    /** The slot the current session saves into. */
+    var activeSlot = 0
+
+    private val dir = context.filesDir
     private val json = Json { ignoreUnknownKeys = true }
 
-    fun load(game: GameState): Boolean {
+    init {
+        migrateLegacySave()
+        refreshSummaries()
+    }
+
+    private fun fileFor(slot: Int): File = File(dir, "${FILE_PREFIX}${slot.coerceIn(0, SLOT_COUNT - 1)}.json")
+
+    /** v2.0 wrote a single fixed-name file; adopt it as slot 0 exactly once. */
+    private fun migrateLegacySave() {
+        try {
+            val legacy = File(dir, LEGACY_FILE_NAME)
+            if (legacy.exists() && (0 until SLOT_COUNT).none { fileFor(it).exists() }) {
+                legacy.renameTo(fileFor(0))
+            }
+        } catch (_: Exception) {
+        }
+    }
+
+    fun refreshSummaries() {
+        slotsFlow.value = (0 until SLOT_COUNT).map { slot ->
+            readSummary(slot)
+        }
+    }
+
+    private fun readSummary(slot: Int): SlotSummary? {
+        val file = fileFor(slot)
+        if (!file.exists()) return null
+        return try {
+            val data = json.decodeFromString(SaveData.serializer(), file.readText())
+            SlotSummary(
+                slot = slot, level = data.level, coins = data.coins,
+                playSeconds = data.statsPlaySeconds, lastPlayedMs = data.lastPlayedEpochMs,
+                miners = data.minersHired, questIndex = data.questIndex,
+            )
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /** Most recently played slot, or -1 when the device has no villages. */
+    fun mostRecentSlot(): Int {
+        var best = -1
+        var bestMs = -1L
+        for (slot in 0 until SLOT_COUNT) {
+            val s = readSummary(slot) ?: continue
+            if (s.lastPlayedMs > bestMs) { bestMs = s.lastPlayedMs; best = slot }
+        }
+        return best
+    }
+
+    fun hasSave(): Boolean = mostRecentSlot() >= 0
+
+    fun load(game: GameState, slot: Int = activeSlot): Boolean {
+        activeSlot = slot
+        val file = fileFor(slot)
         if (!file.exists()) return false
         return try {
             val data = json.decodeFromString(SaveData.serializer(), file.readText())
-            if (data.version != VERSION && data.version != V1_VERSION) return false
+            if (data.version != VERSION && data.version != V2_VERSION && data.version != V1_VERSION) return false
             game.coins = data.coins
             game.pickTier = data.pickTier
             game.binOwned = data.binOwned
             game.bootsLevel = data.bootsLevel
             game.backpackLevel = data.backpackLevel
             game.sfxEnabled = data.sfxEnabled
+            game.musicEnabled = data.musicEnabled
             game.inventory.setCounts(data.carriedOre)
             game.stockpile.setCounts(data.stockpiledOre)
             game.player.x = data.playerX
@@ -228,17 +279,19 @@ class SaveManager(context: Context) {
             game.player.prevZ = data.playerZ
             game.player.facing = data.playerFacing
             game.player.prevFacing = data.playerFacing
-            if (data.rockAlive.size == game.rocks.size) {
+            if (data.rockAlive.isNotEmpty()) {
+                // Size-padded so v2 saves (24 rocks) load into the 32-rock v2.1 world.
                 for (i in game.rocks.indices) {
-                    game.rocks[i].alive = data.rockAlive[i] != 0
-                    game.rocks[i].hp = data.rockHp[i]
-                    game.rocks[i].respawnTimer = data.rockRespawn[i]
+                    game.rocks[i].alive = i < data.rockAlive.size && data.rockAlive[i] != 0
+                    game.rocks[i].hp = if (i < data.rockHp.size) data.rockHp[i] else game.rocks[i].ore.rockHp
+                    game.rocks[i].respawnTimer = if (i < data.rockRespawn.size) data.rockRespawn[i] else 0f
                 }
             }
             // v2 fields (defaults cover v1 saves)
             game.furnaceOwned = data.furnaceOwned
             game.ingots.setCounts(data.ingots)
             game.items.setCounts(data.items)
+            game.smeltQueue.clear()
             if (data.smeltQueueMetal.size == data.smeltQueueRemain.size) {
                 for (i in data.smeltQueueMetal.indices) {
                     val metal = Metal.entries.getOrNull(data.smeltQueueMetal[i]) ?: continue
@@ -267,12 +320,19 @@ class SaveManager(context: Context) {
             game.stats.setIngots(data.statsIngotsSmelted)
             game.stats.setItems(data.statsItemsCrafted)
             game.stats.playSeconds = data.statsPlaySeconds
+            // v3 fields (defaults cover v1/v2 saves)
+            game.achievements.clear()
+            game.achievements.addAll(data.achievements)
+            game.stats.rocksBroken = data.statsRocksBroken
+            game.stats.offlineGains = data.statsOfflineGains
+            game.stats.nightSeconds = data.statsNightSeconds
             true
         } catch (e: Exception) { false }
     }
 
     fun save(game: GameState) {
         try {
+            val file = fileFor(activeSlot)
             val data = SaveData(
                 version = VERSION, coins = game.coins, pickTier = game.pickTier,
                 binOwned = game.binOwned, carriedOre = game.inventory.countsArray().toList(),
@@ -280,6 +340,7 @@ class SaveManager(context: Context) {
                 playerX = game.player.x, playerZ = game.player.z, playerFacing = game.player.facing,
                 bootsLevel = game.bootsLevel, backpackLevel = game.backpackLevel,
                 sfxEnabled = game.sfxEnabled,
+                musicEnabled = game.musicEnabled,
                 rockAlive = game.rocks.map { if (it.alive) 1 else 0 },
                 rockHp = game.rocks.map { it.hp },
                 rockRespawn = game.rocks.map { it.respawnTimer },
@@ -300,28 +361,35 @@ class SaveManager(context: Context) {
                 statsIngotsSmelted = game.stats.ingotsSmelted.toList(),
                 statsItemsCrafted = game.stats.itemsCrafted.toList(),
                 statsPlaySeconds = game.stats.playSeconds,
+                achievements = game.achievements.toList(),
+                statsRocksBroken = game.stats.rocksBroken,
+                statsOfflineGains = game.stats.offlineGains,
+                statsNightSeconds = game.stats.nightSeconds,
             )
-            val tmp = File(file.parentFile, FILE_NAME + ".tmp")
+            val tmp = File(file.parentFile, file.name + ".tmp")
             tmp.writeText(json.encodeToString(SaveData.serializer(), data))
             if (!tmp.renameTo(file)) { tmp.copyTo(file, overwrite = true); tmp.delete() }
             persistenceWarning.value = false
+            refreshSummaries()
         } catch (e: Exception) { persistenceWarning.value = true }
     }
 
-    fun reset() {
+    fun delete(slot: Int) {
         try {
-            file.delete()
+            fileFor(slot).delete()
             persistenceWarning.value = false
+            refreshSummaries()
         } catch (_: Exception) {
         }
     }
 
-    fun hasSave(): Boolean = file.exists()
-
     companion object {
-        const val VERSION = 2
+        const val SLOT_COUNT = 3
+        const val VERSION = 3
+        const val V2_VERSION = 2
         const val V1_VERSION = 1
-        const val FILE_NAME = "villageforge_save.json"
+        const val LEGACY_FILE_NAME = "villageforge_save.json"
+        const val FILE_PREFIX = "villageforge_slot"
     }
 }
 

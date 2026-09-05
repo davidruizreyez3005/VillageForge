@@ -47,6 +47,12 @@ class WorldRenderer(private val engine: Engine, private val game: GameState) {
     private var lanternInstance: MaterialInstance? = null
     private var smokeTimer = 0f
 
+    // v2.1 — Crystal Hollow.
+    private val crystalInstances = ArrayList<MaterialInstance>()
+    private var monolithInstance: MaterialInstance? = null
+    private val monolithLightEntity: Int = EntityManager.get().create()
+    private var monolithLightInstance = 0
+
     private val minerRigs = ArrayList<HumanoidRig>()
     private var clock = 0f
 
@@ -60,6 +66,7 @@ class WorldRenderer(private val engine: Engine, private val game: GameState) {
         buildTradePost()
         buildBin()
         buildFurnace()
+        buildHollow()
         playerRig.setPickTint(game.pickTier)
     }
 
@@ -122,15 +129,32 @@ class WorldRenderer(private val engine: Engine, private val game: GameState) {
         }
     }
 
+    /** Cliff boxes stacked along a Z run at fixed X (for east/west walls). */
+    private fun addCliffColumn(rng: Random, instances: List<MaterialInstance>, z0: Float, z1: Float, x: Float) {
+        var z = z0
+        while (z < z1) {
+            val d = 4f + rng.nextFloat() * 3f
+            val h = 7f + rng.nextFloat() * 6f
+            val w = 4.5f + rng.nextFloat() * 2f
+            val yaw = (rng.nextFloat() - 0.5f) * 8f
+            assets.addRenderable(scene, assets.box, instances[rng.nextInt(instances.size)],
+                Transforms.trs(x, WorldLayout.groundHeight(x, z) - 0.6f, z + d / 2f, w, h, d, yaw))
+            z += d - 0.8f
+        }
+    }
+
     private fun buildCliffs() {
         val instances = Theme.CLIFF.map { assets.material(it, Theme.ROUGHNESS_PROP) }
         val rng = Random(99)
         val half = WorldLayout.VALLEY_WIDTH / 2f
-        // Far wall behind the north canyon.
-        addCliffRow(rng, instances, -half - 2f, half + 2f, WorldLayout.CANYON_Z_MIN - 2.2f)
+        // Far wall behind the north canyon and the hollow.
+        addCliffRow(rng, instances, WorldLayout.HOLLOW_X_MIN - 2.5f, half + 2f, WorldLayout.CANYON_Z_MIN - 2.2f)
         // Valley north rim, leaving the canyon pass open around |x| < 8.5.
         addCliffRow(rng, instances, -half - 2f, -8.5f, WorldLayout.VALLEY_Z_MIN - 1.5f)
         addCliffRow(rng, instances, 8.5f, half + 2f, WorldLayout.VALLEY_Z_MIN - 1.5f)
+        // Hollow rims: south lip and the sheer west wall.
+        addCliffRow(rng, instances, WorldLayout.HOLLOW_X_MIN - 1.5f, WorldLayout.HOLLOW_X_MAX - 1f, WorldLayout.HOLLOW_Z_MAX + 0.5f)
+        addCliffColumn(rng, instances, WorldLayout.HOLLOW_Z_MIN + 1f, WorldLayout.HOLLOW_Z_MAX + 1f, WorldLayout.HOLLOW_X_MIN - 1.5f)
     }
 
     private fun buildGate() {
@@ -297,6 +321,91 @@ class WorldRenderer(private val engine: Engine, private val game: GameState) {
         }
     }
 
+    // ---- Crystal Hollow (v2.1) ----------------------------------------------
+
+    /**
+     * The westward side-canyon: glowing crystal clusters, a giant luminous
+     * monolith with its own point light, an old timbered mine entrance in the
+     * north wall, standing stones, and lantern posts at the link mouth.
+     */
+    private fun buildHollow() {
+        val rng = Random(2121)
+
+        // Emissive crystal clusters: 2-3 tilted shards each, alternating hues.
+        for ((cx, cz, scale) in WorldLayout.crystalClusters) {
+            val base = WorldLayout.groundHeight(cx, cz)
+            val hue = if ((cx * 7f + cz).toInt() % 2 == 0) Theme.CRYSTAL_A else Theme.CRYSTAL_B
+            val instance = assets.material(
+                hue, Theme.ROUGHNESS_ORE, Theme.METALLIC_ORE,
+                emissive = hue, emissiveStrength = 0.35f,
+            )
+            crystalInstances.add(instance)
+            val shards = 2 + (rng.nextInt(2))
+            for (s in 0 until shards) {
+                val h = (0.7f + rng.nextFloat() * 0.9f) * scale
+                val w = 0.28f * scale * (1f - 0.25f * s)
+                val yaw = rng.nextFloat() * 90f + 15f
+                val ox = (rng.nextFloat() - 0.5f) * 1.1f
+                val oz = (rng.nextFloat() - 0.5f) * 1.1f
+                assets.addRenderable(scene, assets.box, instance,
+                    Transforms.trs(cx + ox, base, cz + oz, w, h, w, yaw))
+            }
+        }
+
+        // The great crystal monolith: three stacked, rotated prisms + light.
+        val mx = WorldLayout.MONOLITH_X
+        val mz = WorldLayout.MONOLITH_Z
+        val my = WorldLayout.groundHeight(mx, mz)
+        monolithInstance = assets.material(
+            Theme.MONOLITH, Theme.ROUGHNESS_ORE, Theme.METALLIC_ORE,
+            emissive = Theme.MONOLITH, emissiveStrength = 0.6f,
+        )
+        assets.addRenderable(scene, assets.box, monolithInstance!!, Transforms.trs(mx, my, mz, 1.5f, 3.6f, 1.5f, 18f))
+        assets.addRenderable(scene, assets.box, monolithInstance!!, Transforms.trs(mx, my + 3.4f, mz, 1.05f, 2.2f, 1.05f, -12f))
+        assets.addRenderable(scene, assets.box, monolithInstance!!, Transforms.trs(mx, my + 5.4f, mz, 0.62f, 1.4f, 0.62f, 40f))
+        LightManager.Builder(LightManager.Type.POINT)
+            .color(Theme.CRYSTAL_A.r, Theme.CRYSTAL_A.g, Theme.CRYSTAL_A.b)
+            .intensity(900f)
+            .position(mx, my + 2.4f, mz)
+            .falloff(14f)
+            .build(engine, monolithLightEntity)
+        scene.addEntity(monolithLightEntity)
+        monolithLightInstance = engine.lightManager.getInstance(monolithLightEntity)
+
+        // Old mine entrance tucked into the hollow's north wall.
+        val ex = WorldLayout.HOLLOW_X_MIN + 8.5f
+        val ez = WorldLayout.HOLLOW_Z_MIN + 1.2f
+        val ey = WorldLayout.groundHeight(ex, ez)
+        val timber = assets.material(Theme.MINE_TIMBER, Theme.ROUGHNESS_PROP)
+        val dark = assets.material(Theme.MINE_DARK, Theme.ROUGHNESS_PROP)
+        assets.addRenderable(scene, assets.box, dark, Transforms.trs(ex, ey, ez, 3.2f, 2.6f, 1.2f))
+        for (dx in floatArrayOf(-1.5f, 1.5f)) {
+            assets.addRenderable(scene, assets.box, timber, Transforms.trs(ex + dx, ey, ez, 0.4f, 2.6f, 0.4f))
+        }
+        assets.addRenderable(scene, assets.box, timber, Transforms.trs(ex, ey + 2.5f, ez, 3.5f, 0.4f, 0.5f))
+
+        // Weathered standing stones.
+        val stone = assets.material(Theme.STANDING_STONE, Theme.ROUGHNESS_PROP)
+        for ((sx, sz, h) in WorldLayout.standingStones) {
+            val sy = WorldLayout.groundHeight(sx, sz)
+            val yaw = rng.nextFloat() * 360f
+            assets.addRenderable(scene, assets.box, stone, Transforms.trs(sx, sy, sz, 0.7f, h, 0.45f, yaw))
+            assets.addRenderable(scene, assets.box, stone, Transforms.trs(sx, sy + h, sz, 0.95f, 0.25f, 0.6f, yaw + 20f))
+        }
+
+        // Lantern posts marking the link mouth — the trail into the hollow.
+        if (lanternInstance == null) {
+            lanternInstance = assets.material(Theme.LANTERN_GLOW, Theme.ROUGHNESS_PROP, Theme.METALLIC_DEFAULT, Theme.LANTERN_GLOW, 0.05f)
+        }
+        val wood = assets.material(Theme.GATE_WOOD, Theme.ROUGHNESS_PROP)
+        for (lx in floatArrayOf(-31.5f, -17.5f)) {
+            val lz = WorldLayout.LINK_Z_MAX + 2.2f
+            val ly = WorldLayout.groundHeight(lx, lz)
+            assets.addRenderable(scene, assets.box, wood, Transforms.trs(lx, ly, lz, 0.14f, 2.3f, 0.14f))
+            assets.addRenderable(scene, assets.box, lanternInstance!!, Transforms.trs(lx, ly + 2.45f, lz, 0.26f, 0.34f, 0.26f))
+        }
+    }
+
     // ---- Per-frame sync ----------------------------------------------------
 
     fun onViewport(width: Int, height: Int) { cameraRig.setViewport(width, height) }
@@ -433,26 +542,34 @@ class WorldRenderer(private val engine: Engine, private val game: GameState) {
 
     // ---- Day / night -------------------------------------------------------
 
+    /**
+     * v2.1 fix: the daylight curve is CONTINUOUS and floored. The old curve
+     * snapped from 0.85 to ~0.06 at the dawn/day boundary (the "super dark at
+     * dawn" bug) and night dropped to near-black. Now: night holds a bright
+     * moonlit floor, dawn/dusk ramp between moonlight and golden hour, and
+     * mid-day never dips — the valley stays readable around the clock.
+     */
     private fun applyDayNight() {
         val t = game.timeOfDay
+        val night = DayNight.nightness(t)
         val daylight: Float
         val dayT: Float
         when {
             t < DayNight.DAWN_END -> {
-                val k = t / DayNight.DAWN_END
-                daylight = k * 0.85f
-                dayT = 0.02f * k
+                val k = smoothStep(t / DayNight.DAWN_END)
+                daylight = lerp(DayNight.MOONLIGHT, DayNight.GOLDEN, k)
+                dayT = 0f
             }
             t < DayNight.DAY_END -> {
                 dayT = (t - DayNight.DAWN_END) / (DayNight.DAY_END - DayNight.DAWN_END)
-                daylight = sin(Math.PI * dayT).toFloat().coerceIn(0.06f, 1f)
+                daylight = DayNight.GOLDEN + (1f - DayNight.GOLDEN) * sin(Math.PI * dayT).toFloat()
             }
             t < DayNight.DUSK_END -> {
-                val k = (t - DayNight.DAY_END) / (DayNight.DUSK_END - DayNight.DAY_END)
-                daylight = (1f - k) * 0.85f
-                dayT = 1f - 0.02f * k
+                val k = smoothStep((t - DayNight.DAY_END) / (DayNight.DUSK_END - DayNight.DAY_END))
+                daylight = lerp(DayNight.GOLDEN, DayNight.MOONLIGHT, k)
+                dayT = 1f
             }
-            else -> { daylight = 0f; dayT = 1f }
+            else -> { daylight = DayNight.MOONLIGHT; dayT = 1f }
         }
 
         val elevationParam = sin(Math.PI * dayT.toDouble()).toFloat().coerceIn(0f, 1f)
@@ -461,33 +578,40 @@ class WorldRenderer(private val engine: Engine, private val game: GameState) {
         val sunLux = lerp(DayNight.NIGHT_SUN_LUX, DayNight.DAY_SUN_LUX, daylight)
         val ambientLux = lerp(DayNight.NIGHT_AMBIENT_LUX, DayNight.DAY_AMBIENT_LUX, daylight)
 
-        val sunColor = if (daylight <= 0.02f) DayNight.NIGHT_SUN
-        else mixRgb(DayNight.DUSK_SUN, DayNight.DAY_SUN, horizonWarm)
+        // Warm horizon sun that eases into cool moonlight without popping.
+        val dayColor = mixRgb(DayNight.DUSK_SUN, DayNight.DAY_SUN, horizonWarm)
+        val sunColor = mixRgb(dayColor, DayNight.NIGHT_SUN, night)
         val skyDay = mixRgb(DayNight.DUSK_SKY, DayNight.DAY_SKY, horizonWarm)
-        val skyColor = mixRgb(DayNight.NIGHT_SKY, skyDay, daylight)
+        val skyColor = mixRgb(skyDay, DayNight.NIGHT_SKY, night)
 
         val lm = engine.lightManager
         lm.setColor(sunLightInstance, sunColor.r, sunColor.g, sunColor.b)
         lm.setIntensity(sunLightInstance, sunLux)
-        if (daylight <= 0.02f) {
-            // Moon: fixed high, cool direction.
-            lm.setDirection(sunLightInstance, -0.32f, -0.72f, -0.61f)
-        } else {
-            val azDeg = lerp(75f, 285f, dayT)
-            val elDeg = 10f + 60f * elevationParam
-            val az = Math.toRadians(azDeg.toDouble())
-            val el = Math.toRadians(elDeg.toDouble())
-            val px = (cos(az) * cos(el)).toFloat()
-            val py = sin(el).toFloat()
-            val pz = (sin(az) * cos(el)).toFloat()
-            lm.setDirection(sunLightInstance, -px, -py, -pz)
-        }
+        // Sun path by day; a fixed high moon by deep night; blended between.
+        val azDeg = lerp(75f, 285f, dayT)
+        val elDeg = 10f + 60f * elevationParam
+        val az = Math.toRadians(azDeg.toDouble())
+        val el = Math.toRadians(elDeg.toDouble())
+        val px = (cos(az) * cos(el)).toFloat()
+        val py = sin(el).toFloat()
+        val pz = (sin(az) * cos(el)).toFloat()
+        val moonX = -0.32f; val moonY = -0.72f; val moonZ = -0.61f
+        val dx = lerp(-px, moonX, night)
+        val dy = lerp(-py, moonY, night)
+        val dz = lerp(-pz, moonZ, night)
+        lm.setDirection(sunLightInstance, dx, dy, dz)
         indirectLight?.setIntensity(ambientLux)
         sky?.setColor(skyColor.r, skyColor.g, skyColor.b, 1f)
 
-        // Lanterns and torches come alive as the sun sets.
-        lanternInstance?.setParameter("emissiveStrength", 0.05f + 3.2f * DayNight.nightness(t))
+        // Lanterns, torches, crystals, and the monolith come alive at dusk.
+        lanternInstance?.setParameter("emissiveStrength", 0.05f + 3.2f * night)
+        val crystalGlow = 0.30f + 1.60f * night
+        for (ci in crystalInstances) ci.setParameter("emissiveStrength", crystalGlow)
+        monolithInstance?.setParameter("emissiveStrength", 0.55f + 2.4f * night)
+        engine.lightManager.setIntensity(monolithLightInstance, 700f + 2600f * night)
     }
+
+    private fun smoothStep(x: Float): Float = x * x * (3f - 2f * x)
 
     private fun lerp(a: Float, b: Float, t: Float) = a + (b - a) * t
 
@@ -504,6 +628,7 @@ class WorldRenderer(private val engine: Engine, private val game: GameState) {
         assets.destroy(scene)
         engine.destroyEntity(sunEntity)
         engine.destroyEntity(furnaceLightEntity)
+        engine.destroyEntity(monolithLightEntity)
         indirectLight?.let { engine.destroyIndirectLight(it) }
         sky?.let { engine.destroySkybox(it) }
         cameraRig.destroy()

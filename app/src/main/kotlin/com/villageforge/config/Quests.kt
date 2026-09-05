@@ -3,7 +3,7 @@ package com.villageforge.config
 /** Progress counters quests can watch. */
 enum class QuestMetric {
     COPPER_MINED, ORE_SOLD, PICK_TIER, FORGE_BUILT, INGOTS_SMELTED, ITEMS_CRAFTED,
-    MINERS_HIRED, GOLD_SMELTED, STEEL_PICK, CRYSTAL_BLADE, LEVEL, CRYSTAL_PICK,
+    MINERS_HIRED, GOLD_SMELTED, STEEL_PICK, CRYSTAL_BLADE, LEVEL, CRYSTAL_PICK, CRYSTAL_MINED,
 }
 
 data class QuestDef(
@@ -28,6 +28,8 @@ object Quests {
         QuestDef("Golden Pour", "Smelt 5 gold ingots.", QuestMetric.GOLD_SMELTED, 5, 1500),
         QuestDef("Steel Resolve", "Buy the Steel Pick.", QuestMetric.STEEL_PICK, 1, 2500),
         QuestDef("Legend's Edge", "Forge the Crystal Blade.", QuestMetric.CRYSTAL_BLADE, 1, 5000),
+        // v2.1 — the Crystal Hollow opens west of the canyon.
+        QuestDef("The West Trail", "Follow the lanterns west — find the Crystal Hollow.", QuestMetric.CRYSTAL_MINED, 1, 750),
         QuestDef("Master Smith", "Buy the Crystal Pick.", QuestMetric.CRYSTAL_PICK, 1, 10000),
     )
 

@@ -92,6 +92,7 @@ class Mining(private val bus: EventBus) {
             gs.stats.oresMined[rock.ore.ordinal] += added
             levelsEvent(bus, gs, gs.addXp(added * Progression.XP_PER_ORE))
         }
+        gs.stats.rocksBroken++
         rock.breakRock()
         clearTarget(gs.player)
     }
@@ -502,7 +503,7 @@ class MinerSystem(private val bus: EventBus) {
                         a.rockIndex = rock.index
                         val d = hypot(rock.x - body.x, rock.z - body.z).coerceAtLeast(0.01f)
                         val t = ((d - 1.5f) / d).coerceAtLeast(0f)
-                        body.setTarget(body.x + (rock.x - body.x) * t, body.z + (rock.z - body.z) * t)
+                        body.setRoutedTarget(body.x + (rock.x - body.x) * t, body.z + (rock.z - body.z) * t)
                         a.state = State.WALK_TO_ROCK
                     }
                 }
@@ -544,10 +545,11 @@ class MinerSystem(private val bus: EventBus) {
                         rock.hp -= Miners.damage(gs.pickTier)
                         if (rock.hp <= 0) {
                             rock.breakRock()
+                            gs.stats.rocksBroken++
                             a.carrying = rock.ore
                             a.carryingCount = if (rng.nextDouble() < 0.15f) 2 else 1
                             a.state = State.RETURNING
-                            body.setTarget(
+                            body.setRoutedTarget(
                                 WorldLayout.BIN_X + (rng.nextFloat() - 0.5f) * 2.5f,
                                 WorldLayout.BIN_Z + (rng.nextFloat() - 0.5f) * 2.5f,
                             )
@@ -626,6 +628,7 @@ object OfflineLogic {
         if (oreGains.any { it > 0 }) gs.stockpile.addCounts(oreGains)
 
         val gained = oreGains.any { it > 0 } || ingotGains.any { it > 0 }
+        if (gained) gs.stats.offlineGains += oreGains.sum() + ingotGains.sum()
         return if (gained) GameState.OfflineReport(elapsed, oreGains.toList(), ingotGains.toList()) else null
     }
 }
@@ -634,5 +637,25 @@ object OfflineLogic {
 object DayNightSystem {
     fun update(gs: GameState, dt: Float) {
         gs.timeOfDay = (gs.timeOfDay + dt / DayNight.CYCLE_SECONDS) % 1f
+        if (DayNight.isNightish(gs.timeOfDay)) gs.stats.nightSeconds += dt
+    }
+}
+
+/** v2.1: watches every medal metric and pays out coin rewards on unlock. */
+class AchievementSystem(private val bus: EventBus) {
+
+    fun update(gs: GameState) {
+        for (def in com.villageforge.config.Achievements.all) {
+            if (def.id in gs.achievements) continue
+            if (com.villageforge.config.Achievements.progress(gs, def) >= def.goal) {
+                gs.achievements.add(def.id)
+                gs.coins += def.reward
+                gs.stats.coinsEarnedTotal += def.reward
+                bus.sfx.tryEmit(EventBus.Sfx(SfxId.ACHIEVE))
+                bus.achievementUnlocked.tryEmit(
+                    EventBus.AchievementUnlocked(def.id, def.title, def.reward)
+                )
+            }
+        }
     }
 }

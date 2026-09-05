@@ -56,6 +56,8 @@ class HumanoidRig(
     private val tm = engine.transformManager
     private val rigEntities = IntArray(LIMB_COUNT)
     private val limbMatrices = Array(LIMB_COUNT) { FloatArray(16) }
+    /** Joint chains carry NO scale, so attached parts (boots, pick) keep true size. */
+    private val joints = Array(LIMB_COUNT) { FloatArray(16) }
     private val root = FloatArray(16)
     private val temp = FloatArray(16)
     private val temp2 = FloatArray(16)
@@ -162,12 +164,15 @@ class HumanoidRig(
 
         composeLimb(LEFT_LEG, root, -0.12f, 0.55f, 0f, leftLeg, 0.17f, 0.58f, 0.17f)
         composeLimb(RIGHT_LEG, root, 0.12f, 0.55f, 0f, rightLeg, 0.17f, 0.58f, 0.17f)
-        composeLimb(LEFT_BOOT, limbMatrices[LEFT_LEG], 0f, -0.50f, 0.03f, -leftLeg, 0.19f, 0.12f, 0.26f)
-        composeLimb(RIGHT_BOOT, limbMatrices[RIGHT_LEG], 0f, -0.50f, 0.03f, -rightLeg, 0.19f, 0.12f, 0.26f)
+        // Boots sit at the leg tips, counter-rotated so they stay level —
+        // attached to the JOINT so they keep their true size (v2.1 fix).
+        composeLimb(LEFT_BOOT, joints[LEFT_LEG], 0f, -0.52f, 0.05f, -leftLeg, 0.20f, 0.13f, 0.30f)
+        composeLimb(RIGHT_BOOT, joints[RIGHT_LEG], 0f, -0.52f, 0.05f, -rightLeg, 0.20f, 0.13f, 0.30f)
         composeLimb(LEFT_ARM, root, -0.33f, 1.08f, 0f, leftArm, 0.13f, 0.52f, 0.13f)
         composeLimb(RIGHT_ARM, root, 0.33f, 1.08f, 0f, rightArm, 0.13f, 0.52f, 0.13f)
-        composeLimb(PICK_HANDLE, limbMatrices[RIGHT_ARM], 0f, -0.50f, 0f, -1.2f, 0.07f, 0.55f, 0.07f)
-        composeLimb(PICK_HEAD, limbMatrices[PICK_HANDLE], 0f, -0.52f, 0f, 1.5f, 0.34f, 0.09f, 0.10f)
+        // The pick hangs from the hand (arm tip) at a fixed grip angle; the
+        // handle is CENTERED on the hand so it pokes above and below it.
+        composePick(rightArm)
 
         // Ore sack on the back grows with how full the backpack is.
         if (style.hasSack) {
@@ -193,25 +198,56 @@ class HumanoidRig(
     }
 
     private fun swingPose(t: Float): Float = when {
-        t < 0.35f -> lerp(0f, 2.1f, easeOut(t / 0.35f))
-        t < 0.70f -> lerp(2.1f, -0.7f, easeIn((t - 0.35f) / 0.35f))
-        else -> lerp(-0.7f, 0f, (t - 0.70f) / 0.30f)
+        t < 0.35f -> lerp(0f, 2.1f, easeOut(t / 0.35f))          // raise behind the shoulder
+        t < 0.70f -> lerp(2.1f, -0.85f, easeIn((t - 0.35f) / 0.35f)) // overhead chop into the swing plane
+        else -> lerp(-0.85f, 0f, (t - 0.70f) / 0.30f)           // recover
+    }
+
+    /**
+     * Pickaxe assembly (v2.1 fix). The handle rotates with the arm plus a
+     * fixed +0.35 rad grip, so the windup lifts the head up-back and the
+     * strike sweeps it DOWN into the ground in front of the smith — the
+     * classic overhead mining chop.
+     */
+    private fun composePick(rightArm: Float) {
+        // Handle joint at the hand (arm tip, slightly forward).
+        Transforms.translation(temp, 0f, -0.50f, 0.03f)
+        Transforms.multiply(temp2, joints[RIGHT_ARM], temp)
+        Transforms.rotationX(temp, rightArm + PICK_GRIP_ANGLE)
+        Transforms.multiply(joints[PICK_HANDLE], temp2, temp)
+        // Handle box centered on the hand: spans [-HANDLE_LEN/2, +HANDLE_LEN/2].
+        Transforms.translation(temp, 0f, HANDLE_LEN / 2f, 0f)
+        Transforms.multiply(temp2, joints[PICK_HANDLE], temp)
+        Transforms.scale(temp, 0.055f, HANDLE_LEN, 0.055f)
+        Transforms.multiply(limbMatrices[PICK_HANDLE], temp2, temp)
+
+        // Head joint near the handle's striking tip.
+        Transforms.translation(temp, 0f, -HANDLE_LEN / 2f + 0.06f, 0f)
+        Transforms.multiply(temp2, joints[PICK_HANDLE], temp)
+        Transforms.rotationX(temp, PICK_HEAD_ANGLE)
+        Transforms.multiply(joints[PICK_HEAD], temp2, temp)
+        Transforms.translation(temp, 0f, -0.09f, 0f)
+        Transforms.multiply(temp2, joints[PICK_HEAD], temp)
+        Transforms.scale(temp, 0.13f, 0.42f, 0.12f)
+        Transforms.multiply(limbMatrices[PICK_HEAD], temp2, temp)
     }
 
     private fun composeStatic(index: Int, ox: Float, oy: Float, oz: Float, sx: Float, sy: Float, sz: Float) {
         Transforms.translation(temp, ox, oy, oz)
         Transforms.multiply(temp2, root, temp)
+        System.arraycopy(temp2, 0, joints[index], 0, 16)
         Transforms.scale(temp, sx, sy, sz)
-        Transforms.multiply(limbMatrices[index], temp2, temp)
+        Transforms.multiply(limbMatrices[index], joints[index], temp)
     }
 
-    private fun composeLimb(index: Int, parent: FloatArray, px: Float, py: Float, pz: Float, angle: Float, w: Float, len: Float, d: Float) {
+    private fun composeLimb(index: Int, parentJoint: FloatArray, px: Float, py: Float, pz: Float, angle: Float, w: Float, len: Float, d: Float) {
         Transforms.translation(temp, px, py, pz)
-        Transforms.multiply(temp2, parent, temp)
+        Transforms.multiply(temp2, parentJoint, temp)
         Transforms.rotationX(temp, angle)
-        Transforms.multiply(limbMatrices[index], temp2, temp)
+        System.arraycopy(temp2, 0, joints[index], 0, 16)
+        Transforms.multiply(joints[index], temp2, temp)
         Transforms.translation(temp, 0f, -len, 0f)
-        Transforms.multiply(temp2, limbMatrices[index], temp)
+        Transforms.multiply(temp2, joints[index], temp)
         Transforms.scale(temp, w, len, d)
         Transforms.multiply(limbMatrices[index], temp2, temp)
     }
@@ -229,5 +265,11 @@ class HumanoidRig(
         const val LEFT_ARM = 9; const val RIGHT_ARM = 10
         const val BELT = 11; const val PICK_HANDLE = 12; const val PICK_HEAD = 13
         const val SACK = 14
+
+        const val HANDLE_LEN = 0.88f
+        /** Fixed wrist grip: keeps the pick's arc in the swing plane. */
+        const val PICK_GRIP_ANGLE = 0.35f
+        /** Head bar sits across the handle's tip. */
+        const val PICK_HEAD_ANGLE = 1.5f
     }
 }

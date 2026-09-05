@@ -52,9 +52,13 @@ class GameState {
     var level = 1
     var timeOfDay = DayNight.START_TIME
     var sfxEnabled = true
+    var musicEnabled = true
     var lastTickNanos = 0L
 
     val stats = Stats()
+
+    /** Medal ids unlocked so far (v2.1). */
+    val achievements = LinkedHashSet<String>()
 
     /** Filled by SaveManager on load when offline progress applies; consumed by the HUD. */
     var offlineReport: OfflineReport? = null
@@ -72,6 +76,9 @@ class GameState {
         val ingotsSmelted = IntArray(Metal.entries.size)
         val itemsCrafted = IntArray(Item.entries.size)
         var playSeconds = 0f
+        var rocksBroken = 0
+        var offlineGains = 0
+        var nightSeconds = 0f
         fun ingotsSmeltedTotal(): Int = ingotsSmelted.sum()
         fun itemsCraftedTotal(): Int = itemsCrafted.sum()
     }
@@ -96,6 +103,7 @@ class GameState {
         data class LoadFurnace(val metal: Metal) : Command()
         data class Craft(val item: Item) : Command()
         object ToggleSound : Command()
+        object ToggleMusic : Command()
     }
 
     private val commands = ArrayDeque<Command>()
@@ -136,6 +144,9 @@ class GameState {
     val levelFlow = MutableStateFlow(LevelSnapshot(1, 0, Progression.xpForLevel(1)))
     val minerFlow = MutableStateFlow(MinerSnapshot(0, com.villageforge.config.Miners.HIRE_COSTS.size, -1))
     val timeFlow = MutableStateFlow(DayNight.START_TIME)
+    val musicFlow = MutableStateFlow(true)
+    /** Unlocked medal count — bumps whenever a new achievement lands. */
+    val achievementFlow = MutableStateFlow(0)
 
     private fun questSnapshot(): QuestSnapshot {
         val idx = questIndex
@@ -157,6 +168,7 @@ class GameState {
         QuestMetric.CRYSTAL_BLADE -> stats.itemsCrafted[Item.CRYSTAL_BLADE.ordinal]
         QuestMetric.LEVEL -> level
         QuestMetric.CRYSTAL_PICK -> if (pickTier >= Picks.CRYSTAL.ordinal) 1 else 0
+        QuestMetric.CRYSTAL_MINED -> stats.oresMined[Ore.CRYSTAL.ordinal]
     }
 
     fun publishUi() {
@@ -169,6 +181,8 @@ class GameState {
         val up = UpgradeSnapshot(pickTier, bootsLevel, backpackLevel)
         if (up != upgradeFlow.value) upgradeFlow.value = up
         if (sfxEnabled != sfxFlow.value) sfxFlow.value = sfxEnabled
+        if (musicEnabled != musicFlow.value) musicFlow.value = musicEnabled
+        if (achievements.size != achievementFlow.value) achievementFlow.value = achievements.size
 
         val ing = IngotSnapshot(ingots.counts(), ingots.total)
         if (ing != ingotFlow.value) ingotFlow.value = ing

@@ -2,6 +2,7 @@ package com.villageforge
 
 import android.app.ActivityManager
 import android.content.Context
+import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import android.view.WindowManager
@@ -17,6 +18,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.lifecycleScope
 import com.villageforge.config.BuildInfo
+import com.villageforge.config.DayNight
 import com.villageforge.config.LightingProbe
 import com.villageforge.config.WorldLayout
 import java.io.File
@@ -29,6 +31,7 @@ import com.villageforge.core.SfxId
 import com.villageforge.graphics.FilamentHost
 import com.villageforge.graphics.WorldRenderer
 import com.villageforge.state.GameState
+import com.villageforge.systems.AchievementSystem
 import com.villageforge.systems.Buildings
 import com.villageforge.systems.Craft
 import com.villageforge.systems.DayNightSystem
@@ -67,6 +70,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var craft: Craft
     private lateinit var miners: MinerSystem
     private lateinit var quests: QuestSystem
+    private lateinit var achievements: AchievementSystem
     private var simJob: Job? = null
     private var autosaveTicks = 0
     private var startupFailed = false
@@ -116,7 +120,17 @@ class MainActivity : ComponentActivity() {
         bus = EventBus()
         game = GameState()
         save = SaveManager(this)
-        val loaded = save.load(game)
+
+        // A relaunch with a chosen slot (title picker) or a CI autostart both
+        // arrive through the intent; otherwise start at the title screen.
+        val wantedSlot = intent?.getIntExtra("slot", -1) ?: -1
+        val phase = intent?.getStringExtra("phase")
+        val loaded = if (wantedSlot >= 0) {
+            save.load(game, wantedSlot)
+        } else if (phase == "game") {
+            val recent = save.mostRecentSlot()
+            if (recent >= 0) save.load(game, recent) else false
+        } else false
 
         // Offline progress: hired miners keep digging, the furnace keeps pouring.
         if (loaded && save.lastPlayedEpochMs > 0L) {
@@ -128,6 +142,7 @@ class MainActivity : ComponentActivity() {
 
         audio = AudioManager()
         audio.enabled = game.sfxEnabled
+        audio.music.enabled = game.musicEnabled
 
         host = FilamentHost()
         world = WorldRenderer(host.engine, game)
@@ -142,11 +157,15 @@ class MainActivity : ComponentActivity() {
         craft = Craft(bus)
         miners = MinerSystem(bus)
         quests = QuestSystem(bus)
+        achievements = AchievementSystem(bus)
         upgrades.syncBonuses(game)
         input = InputManager(this, world.cameraRig, game, bus)
 
         // CI / automation fast-path: launch straight into the game world.
-        if (intent?.getStringExtra("phase") == "game") uiPhase = UiPhase.GAME
+        // Slot pickers relaunch with phase=loading to skip the title.
+        when (phase) {
+            "game", "loading" -> uiPhase = if (phase == "game") UiPhase.GAME else UiPhase.LOADING
+        }
 
         lifecycleScope.launch {
             launch {
@@ -186,10 +205,8 @@ class MainActivity : ComponentActivity() {
                 host, input, game, bus, world.cameraRig, save,
                 phase = uiPhase,
                 onPhaseChange = { uiPhase = it },
-                onReset = {
-                    save.reset()
-                    recreate()
-                },
+                onChooseSlot = { slot -> openSlot(slot) },
+                onDeleteSlot = { slot -> save.delete(slot) },
             )
         }
 
@@ -210,6 +227,16 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    /** Rebuilds the activity with the chosen village slot — clean world, no leaks. */
+    private fun openSlot(slot: Int) {
+        startActivity(
+            Intent(this, MainActivity::class.java)
+                .putExtra("slot", slot)
+                .putExtra("phase", "loading")
+        )
+        finish()
     }
 
     override fun onResume() {
@@ -343,6 +370,8 @@ class MainActivity : ComponentActivity() {
         buildings.update(game)
         DayNightSystem.update(game, dt)
         quests.update(game)
+        achievements.update(game)
+        audio.music.nightFactor = DayNight.nightness(game.timeOfDay)
         game.stats.playSeconds += dt
         game.publishUi()
         if (++autosaveTicks >= AUTOSAVE_TICKS) {
@@ -371,12 +400,14 @@ class MainActivity : ComponentActivity() {
 
     private fun drainCommands() {
         val player = game.player
+        /** Walks via the zone router so cross-zone trips use the trails. */
+        fun walkTo(tx: Float, tz: Float) = player.setRoutedTarget(tx, tz)
         while (true) {
             val command = game.drainCommand() ?: break
             when (command) {
                 is GameState.Command.MoveTo -> {
                     clearInteractionTargets()
-                    player.setTarget(command.x, command.z)
+                    player.setRoutedTarget(command.x, command.z)
                 }
                 is GameState.Command.Mine -> {
                     clearInteractionTargets()
@@ -390,13 +421,13 @@ class MainActivity : ComponentActivity() {
                         continue
                     }
                     val stand = standPoint(player.x, player.z, rock.x, rock.z, 1.6f)
-                    player.setTarget(stand.first, stand.second)
+                    walkTo(stand.first, stand.second)
                     mining.setTarget(command.rockIndex)
                 }
                 is GameState.Command.Sell -> {
                     clearInteractionTargets()
                     val stand = standPoint(player.x, player.z, WorldLayout.TRADE_POST_X, WorldLayout.TRADE_POST_Z, 1.9f)
-                    player.setTarget(stand.first, stand.second)
+                    walkTo(stand.first, stand.second)
                     economy.setTarget()
                 }
                 is GameState.Command.Deposit -> {
@@ -407,21 +438,21 @@ class MainActivity : ComponentActivity() {
                         continue
                     }
                     val stand = standPoint(player.x, player.z, WorldLayout.BIN_X, WorldLayout.BIN_Z, 1.9f)
-                    player.setTarget(stand.first, stand.second)
+                    walkTo(stand.first, stand.second)
                     buildings.setDepositTarget()
                 }
                 is GameState.Command.LoadFurnace -> {
                     clearInteractionTargets()
                     if (forge.requestLoad(game, command.metal)) {
                         val stand = standPoint(player.x, player.z, WorldLayout.FURNACE_X, WorldLayout.FURNACE_Z, 1.9f)
-                        player.setTarget(stand.first, stand.second)
+                        walkTo(stand.first, stand.second)
                     }
                 }
                 is GameState.Command.Craft -> {
                     clearInteractionTargets()
                     if (craft.request(game, command.item)) {
                         val stand = standPoint(player.x, player.z, WorldLayout.ANVIL_X, WorldLayout.ANVIL_Z, 1.7f)
-                        player.setTarget(stand.first, stand.second)
+                        walkTo(stand.first, stand.second)
                     }
                 }
                 is GameState.Command.BuyBin -> buildings.tryBuyBin(game)
@@ -436,6 +467,10 @@ class MainActivity : ComponentActivity() {
                 is GameState.Command.ToggleSound -> {
                     game.sfxEnabled = !game.sfxEnabled
                     audio.enabled = game.sfxEnabled
+                }
+                is GameState.Command.ToggleMusic -> {
+                    game.musicEnabled = !game.musicEnabled
+                    audio.music.enabled = game.musicEnabled
                 }
             }
         }
