@@ -13,7 +13,7 @@ import com.villageforge.state.GameState
 import java.io.File
 import kotlin.math.hypot
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.BufferOverflow
+import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json

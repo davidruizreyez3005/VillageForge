@@ -218,8 +218,8 @@ class AssetFactory(private val engine: Engine) {
     private fun newVertexBuffer(positions: FloatArray, normals: FloatArray): VertexBuffer {
         val vb = VertexBuffer.Builder()
             .bufferCount(1).vertexCount(positions.size/3)
-            .attribute(VertexAttribute.POSITION, 0, VertexBuffer.AttributeType.FLOAT3, 0, 24)
-            .attribute(VertexAttribute.NORMAL, 0, VertexBuffer.AttributeType.FLOAT3, 12, 24)
+            .attribute(VertexBuffer.VertexAttribute.POSITION, 0, VertexBuffer.AttributeType.FLOAT3, 0, 24)
+            .attribute(VertexBuffer.VertexAttribute.NORMAL, 0, VertexBuffer.AttributeType.FLOAT3, 12, 24)
             .build(engine)
         val buf = ByteBuffer.allocateDirect(positions.size*8).order(ByteOrder.nativeOrder())
         val floats = buf.asFloatBuffer()
@@ -234,7 +234,7 @@ class AssetFactory(private val engine: Engine) {
     }
 
     private fun newIndexBuffer(indices: List<Int>): IndexBuffer {
-        val ib = IndexBuffer.Builder().indexCount(indices.size).bufferType(IndexBuffer.BuilderType.USHORT).build(engine)
+        val ib = IndexBuffer.Builder().indexCount(indices.size).bufferType(IndexBuffer.Builder.IndexType.USHORT).build(engine)
         val buf = ByteBuffer.allocateDirect(indices.size*2).order(ByteOrder.nativeOrder())
         for (i in indices) buf.putShort(i.toShort())
         buf.flip()
@@ -306,9 +306,15 @@ class CameraRig(private val engine: Engine) {
         val cy = cos(yawRad).toFloat()*cos(pitchRad).toFloat()
         val sy = sin(yawRad).toFloat()*cos(pitchRad).toFloat()
         val py = sin(pitchRad).toFloat()
-        camera.lookAt(focusX+sy*80f, py*80f, focusZ+cy*80f, focusX, 0f, focusZ, 0f, 1f, 0f)
+        camera.lookAt(
+            (focusX+sy*80f).toDouble(), (py*80f).toDouble(), (focusZ+cy*80f).toDouble(),
+            focusX.toDouble(), 0.0, focusZ.toDouble(), 0.0, 1.0, 0.0,
+        )
         val aspect = viewportWidth.toFloat()/viewportHeight.toFloat()
-        camera.setProjection(Camera.Projection.ORTHO, -zoom*aspect, zoom*aspect, -zoom, zoom, 1f, 200f)
+        camera.setProjection(
+            Camera.Projection.ORTHO,
+            (-zoom*aspect).toDouble(), (zoom*aspect).toDouble(), -zoom.toDouble(), zoom.toDouble(), 1.0, 200.0,
+        )
     }
 
     private fun clampFocus() {
@@ -397,7 +403,7 @@ class FilamentHost {
 
     fun stop() { running = false; choreographer.removeFrameCallback(frameCallback) }
 
-    private val frameCallback = Choreographer.FrameCallback { frameTimeNanos ->
+    private val frameCallback = Choreographer.FrameCallback { frameTimeNanos: Long ->
         val dt = if (lastFrameNanos == 0L) 0f else (frameTimeNanos-lastFrameNanos)*1e-9f
         lastFrameNanos = frameTimeNanos
         draw(dt, frameTimeNanos)
