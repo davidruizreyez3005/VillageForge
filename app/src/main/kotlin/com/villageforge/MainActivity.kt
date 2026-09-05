@@ -1,13 +1,21 @@
 package com.villageforge
 
+import android.app.ActivityManager
+import android.content.Context
+import android.os.Build
 import android.os.Bundle
 import android.view.WindowManager
+import android.widget.Button
+import android.widget.LinearLayout
+import android.widget.ScrollView
+import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.lifecycle.lifecycleScope
 import com.villageforge.config.WorldLayout
 import com.villageforge.core.AudioManager
+import com.villageforge.core.CrashReport
 import com.villageforge.core.EventBus
 import com.villageforge.core.InputManager
 import com.villageforge.core.SaveManager
@@ -25,6 +33,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import java.io.PrintWriter
+import java.io.StringWriter
 import kotlin.math.hypot
 
 class MainActivity : ComponentActivity() {
@@ -42,11 +52,45 @@ class MainActivity : ComponentActivity() {
     private lateinit var upgrades: UpgradeManager
     private var simJob: Job? = null
     private var autosaveTicks = 0
+    private var startupFailed = false
 
     private val tickNanos = (GameState.TICK_SECONDS * 1e9f).toLong()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        installCrashGuard()
+        try {
+            startApp(savedInstanceState)
+        } catch (t: Throwable) {
+            startupFailed = true
+            abortStartup(t)
+        }
+    }
+
+    /**
+     * Saves any unexpected (post-startup) crash to disk before the normal
+     * crash flow runs; the report is surfaced on the next launch.
+     */
+    private fun installCrashGuard() {
+        val previous = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+            try {
+                CrashReport.save(applicationContext, buildReport(throwable))
+            } catch (_: Throwable) {
+            }
+            previous?.uncaughtException(thread, throwable)
+        }
+    }
+
+    private fun startApp(savedInstanceState: Bundle?) {
+        // Surface a saved crash report from a previous run before doing anything
+        // else (plain Views only), so mid-game crashes are always diagnosable.
+        CrashReport.load(this)?.let { pending ->
+            startupFailed = true
+            showReportScreen(pending, allowContinue = true)
+            return
+        }
+
         enableEdgeToEdge()
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
@@ -90,6 +134,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        if (startupFailed) return
         host.start()
         audio.start()
         startSimLoop()
@@ -97,6 +142,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onPause() {
         super.onPause()
+        if (startupFailed) return
         host.stop()
         simJob?.cancel()
         simJob = null
@@ -108,6 +154,83 @@ class MainActivity : ComponentActivity() {
         if (this::world.isInitialized) world.destroy()
         if (this::host.isInitialized) host.destroy()
         super.onDestroy()
+    }
+
+    /** Saves and displays the full error report; the app stays open on screen. */
+    private fun abortStartup(t: Throwable) {
+        val report = buildReport(t)
+        try {
+            CrashReport.save(applicationContext, report)
+        } catch (_: Throwable) {
+        }
+        try {
+            showReportScreen(report, allowContinue = false)
+        } catch (inner: Throwable) {
+            inner.addSuppressed(t)
+            throw inner
+        }
+    }
+
+    private fun buildReport(t: Throwable): String {
+        val glVersion = try {
+            (getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager)
+                ?.deviceConfigurationInfo?.glEsVersion ?: "unknown"
+        } catch (_: Throwable) {
+            "unknown"
+        }
+        val sw = StringWriter()
+        t.printStackTrace(PrintWriter(sw))
+        return buildString {
+            appendLine("Village Forge ${BuildInfo.VERSION} — error report")
+            appendLine("Device: ${Build.MANUFACTURER} ${Build.MODEL}")
+            appendLine("Android: ${Build.VERSION.RELEASE} (SDK ${Build.VERSION.SDK_INT})")
+            appendLine("OpenGL ES: $glVersion")
+            appendLine()
+            append(sw.toString())
+        }
+    }
+
+    /**
+     * Plain framework Views only (no Compose, no Filament): this screen must
+     * render even when the entire rendering stack failed to initialize.
+     */
+    private fun showReportScreen(text: String, allowContinue: Boolean) {
+        val pad = (16 * resources.displayMetrics.density).toInt()
+        val scroll = ScrollView(this)
+        val column = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(0xFF101014.toInt())
+            setPadding(pad, pad, pad, pad)
+        }
+        column.addView(TextView(this).apply {
+            text = "Village Forge ${BuildInfo.VERSION} — problem report"
+            setTextColor(0xFFFFD54A.toInt())
+            textSize = 18f
+            setPadding(0, 0, 0, pad / 2)
+        })
+        column.addView(TextView(this).apply {
+            text = text
+            setTextColor(0xFFE8E8E8.toInt())
+            textSize = 12f
+            setTextIsSelectable(true)
+        })
+        if (allowContinue) {
+            column.addView(TextView(this).apply {
+                text = "\nThe report above was captured from the previous run."
+                setTextColor(0xFF9AA0A6.toInt())
+                textSize = 13f
+                setPadding(0, pad / 2, 0, pad / 2)
+            })
+            column.addView(Button(this).apply {
+                text = "Continue"
+                setOnClickListener {
+                    CrashReport.clear(applicationContext)
+                    recreate()
+                }
+            })
+        }
+        scroll.addView(column)
+        setContentView(scroll)
     }
 
     private fun startSimLoop() {

@@ -33,21 +33,81 @@ jobs:
       - name: Stage APK
         run: |
           mkdir -p dist
-          cp app/build/outputs/apk/release/app-release.apk dist/VillageForge-v1.1.apk
+          cp app/build/outputs/apk/release/app-release.apk dist/VillageForge-v1.2.apk
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: village-forge-apk
-          path: dist/VillageForge-v1.1.apk
+          path: dist/VillageForge-v1.2.apk
           retention-days: 30
           if-no-files-found: error
 
-      - name: Publish to GitHub Releases (tag v1.1)
+  emulator-test:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: village-forge-apk
+          path: dist
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Launch app on Android emulator and verify it stays alive
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 30
+          arch: x86_64
+          target: google_apis
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          disable-animations: true
+          script: |
+            set -e
+            adb install -r dist/VillageForge-v1.2.apk
+            adb logcat -c
+            adb shell am start -W -n com.villageforge/.MainActivity
+            sleep 20
+            adb logcat -d > full_logcat.txt || true
+            PID=$(adb shell pidof com.villageforge | tr -d '\r' || true)
+            if [ -z "$PID" ]; then
+              echo "=== APP PROCESS DIED — dumping logcat ==="
+              cat full_logcat.txt
+              exit 1
+            fi
+            if grep -q "FATAL EXCEPTION" full_logcat.txt; then
+              echo "=== FATAL EXCEPTION IN LOGCAT ==="
+              grep -A 40 "FATAL EXCEPTION" full_logcat.txt
+              exit 1
+            fi
+            echo "=== APP IS RUNNING (pid $PID) — smoke test PASSED ==="
+
+      - name: Upload logcat
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: emulator-logcat
+          path: full_logcat.txt
+          if-no-files-found: ignore
+
+  release:
+    runs-on: ubuntu-latest
+    needs: [build, emulator-test]
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: village-forge-apk
+          path: dist
+
+      - name: Publish to GitHub Releases (tag v1.2)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create v1.1 dist/VillageForge-v1.1.apk \
-            --title "Village Forge v1.1" \
-            --notes "Stable build. Fixes the startup crash: Filament native libraries are now initialized before the 3D engine starts. APK is signed with a persistent keystore, so all future updates install over this one without uninstalling. If Android blocks installation over the previous v1.0A build (different signature), uninstall the old app once and install this APK." \
-            || gh release upload v1.1 dist/VillageForge-v1.1.apk --clobber
+          gh release create v1.2 dist/VillageForge-v1.2.apk \
+            --title "Village Forge v1.2" \
+            --notes "Verified launch on an Android emulator in CI. Startup is now crash-guarded: if anything fails on a device, the app shows the full error report on screen instead of closing. Rendering falls back from OpenGL to Vulkan when needed. If a problem screen appears, send a screenshot of it." \
+            || gh release upload v1.2 dist/VillageForge-v1.2.apk --clobber

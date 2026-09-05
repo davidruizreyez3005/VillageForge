@@ -395,9 +395,29 @@ class FilamentHost {
             // app crashes immediately on launch.
             Filament.init()
         }
+
+        /**
+         * Creates the rendering engine with a device-compatibility fallback:
+         * OpenGL is Filament's default; on devices whose GLES3 driver fails to
+         * initialize we retry with the Vulkan backend before giving up.
+         */
+        fun createEngine(): Engine = try {
+            Engine.create()
+        } catch (gl: Throwable) {
+            try {
+                Engine.create(Backend.VULKAN)
+            } catch (vk: Throwable) {
+                val err = RuntimeException(
+                    "Filament engine failed to start on both OpenGL and Vulkan backends"
+                )
+                err.addSuppressed(gl)
+                err.addSuppressed(vk)
+                throw err
+            }
+        }
     }
 
-    val engine: Engine = Engine.create()
+    val engine: Engine = createEngine()
     private val renderer: Renderer = engine.createRenderer()
     private val view: View = engine.createView()
     private var swapChain: SwapChain? = null
