@@ -37,6 +37,7 @@ class Effects(
         emissive = Theme.FURNACE_EMBER, emissiveStrength = 5f,
     )
     private val boxMesh = factory.box
+    private val gemMesh = factory.gem
 
     private val debris = ArrayList<Particle>()
     private val sparks = ArrayList<Particle>()
@@ -45,17 +46,18 @@ class Effects(
     private val scratch = FloatArray(16)
 
     init {
-        for (i in 0 until DEBRIS_COUNT) debris.add(Particle(createParticle(sparkInstance), null))
-        for (i in 0 until SPARK_COUNT) sparks.add(Particle(createParticle(sparkInstance), null))
+        for (i in 0 until DEBRIS_COUNT) debris.add(Particle(createParticle(sparkInstance, boxMesh), null))
+        // v2.3 — embers pop as little gems now, not boxes.
+        for (i in 0 until SPARK_COUNT) sparks.add(Particle(createParticle(sparkInstance, gemMesh), null))
         for (i in 0 until SMOKE_COUNT) {
             val instance = factory.smokeInstance()
-            smoke.add(Particle(createParticle(instance), instance))
+            smoke.add(Particle(createParticle(instance, boxMesh), instance))
         }
     }
 
-    private fun createParticle(instance: MaterialInstance): Int {
+    private fun createParticle(instance: MaterialInstance, mesh: AssetFactory.Mesh): Int {
         val identity = Transforms.trs(0f, -10f, 0f, 0.001f, 0.001f, 0.001f)
-        return factory.addRenderable(scene, boxMesh, instance, identity)
+        return factory.addRenderable(scene, mesh, instance, identity)
     }
 
     /** Chunks fly out of a struck rock with the rock's own tint. */

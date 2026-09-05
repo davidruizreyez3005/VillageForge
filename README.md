@@ -16,6 +16,8 @@ A 3D idle-mining village game for Android, rendered with Google [Filament](https
 - **Save slots**: three separate villages on one device, picked from the title screen (v2.0 saves migrate to slot 1 automatically)
 - **Levels & XP** with level-up coin bonuses
 - **Day/night cycle**: warm dawns and dusks, bright moonlit nights, torches, lanterns, and crystals that light up after dark, a furnace fire that breathes
+- **Carried torches (v2.3)**: as dusk gathers the smith and the hired miners light torches — a warm, flickering light travels with you so low-brightness screens stay playable all night
+- **Reforged world (v2.3)**: the old everything-is-boxes look is gone — chamfered buildings, round posts and tapered towers, conical pines, faceted tree canopies, craggy cliff walls, gem crystal shards and flames, solid gable roofs with real eaves, cloth windmill sails, an octagonal well and fountain, an arched furnace mouth, and grass tufts + pebbles scattered across the ground
 - Animated blacksmith (walk, swing, idle bob) built from a 15-part procedural rig with hair, beard, boots, a growing ore backpack, and a full-size pickaxe that chops into the rock (v2.1 rig fix)
 - **Isometric camera**: locked 45° view, drag to pan, pinch to zoom; walkers follow valley trails between zones
 - Visual juice: rock debris on every strike, anvil sparks while crafting, chimney smoke while smelting, tap ripples
@@ -46,7 +48,7 @@ The APK is built automatically by GitHub Actions on every push to `main`.
 1. Open the repository → **Actions** → **Build APK**
 2. Wait for the run to finish (a few minutes)
 3. Download the **village-forge-apk** artifact from the run page
-4. Unzip it and sideload `VillageForge-v2.2.1.apk` onto any Android 7.0+ device
+4. Unzip it and sideload `VillageForge-v2.3.apk` onto any Android 7.0+ device
 
 To build locally:
 

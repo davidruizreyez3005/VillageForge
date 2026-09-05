@@ -6,6 +6,7 @@ import com.google.android.filament.*
 import com.google.android.filament.filamat.MaterialBuilder
 import com.google.android.filament.filamat.MaterialPackage
 import com.villageforge.config.Theme
+import com.villageforge.config.Town
 import com.villageforge.config.WorldLayout
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -13,6 +14,7 @@ import kotlin.math.cos
 import kotlin.math.exp
 import kotlin.math.sin
 import kotlin.math.sqrt
+import kotlin.math.tan
 import kotlinx.coroutines.flow.MutableStateFlow
 
 object Transforms {
@@ -190,6 +192,62 @@ class AssetFactory(private val engine: Engine) {
     val rockVariants: List<Mesh> by lazy { (0 until 6).map { buildRock(it) } }
     val terrainParts: List<Mesh> by lazy { buildTerrain() }
 
+    // ---- v2.3 curved primitive library -------------------------------------
+    // The whole world was boxes, which read as "boxy". These kill that look
+    // while staying inside the same cheap fully-dynamic no-asset budget:
+    // every primitive is one small shared mesh, reused by hundreds of
+    // renderables through per-instance transforms like `box` always was.
+
+    /** Chamfered box, same unit footprint as `box` (y 0..1). */
+    val roundedBox: Mesh by lazy { buildRoundedBox() }
+    /** 6-sided column, y 0..1, diameter 1. */
+    val cyl6: Mesh by lazy { prism(6, 1f) }
+    /** 8-sided column, y 0..1, diameter 1. */
+    val cyl8: Mesh by lazy { prism(8, 1f) }
+    /** 8-sided taper (top diameter 0.55): chimneys, towers, monolith. */
+    val taper8: Mesh by lazy { prism(8, 0.55f) }
+    /** 6-sided cone: pine layers, spires. */
+    val cone6: Mesh by lazy { prism(6, 0.06f) }
+    /** 4-sided cone: wheat spikes, scatter blades. */
+    val cone4: Mesh by lazy { prism(4, 0.05f) }
+    /** Hemisphere, y 0..0.5, radius 0.5, flat side down. */
+    val dome: Mesh by lazy { buildDome() }
+    /** Elongated octahedron, y 0..1, widest at y 0.4: flames, shards, windows. */
+    val gem: Mesh by lazy { buildGem() }
+    /** Rounded-top flat panel facing +z: the furnace mouth arch. */
+    val archPanel: Mesh by lazy { buildArchPanel() }
+    /** Windmill cloth sail: tapered slab, y 0.2..2.5, root half-width 0.24. */
+    val sail: Mesh by lazy { buildSail() }
+    /** Three organic faceted canopy blobs, radius ~0.55, centred on origin. */
+    val canopyBlobs: List<Mesh> by lazy { (0 until 3).map { buildCanopyBlob(it) } }
+    /** Four tapered, jittered cliff slabs, y 0..1 like `box`. */
+    val cliffVariants: List<Mesh> by lazy { (0 until 4).map { buildCliffSlab(it) } }
+    /** One merged mesh of grass tufts scattered over the walkable ground. */
+    val tuftScatter: Mesh by lazy { buildScatter(pebbles = false) }
+    /** One merged mesh of pebble chips scattered over the walkable ground. */
+    val pebbleScatter: Mesh by lazy { buildScatter(pebbles = true) }
+
+    /** Cached n-sided prism with a custom top scale (both ends capped). */
+    fun prism(sides: Int, topScale: Float): Mesh =
+        prismCache.getOrPut(sides to topScale) { buildPrism(sides, topScale) }
+    private val prismCache = HashMap<Pair<Int, Float>, Mesh>()
+
+    private val roofCache = ArrayList<Pair<FloatArray, Mesh>>()
+
+    /**
+     * Solid gable roof: a pentagon profile (eave / slope / ridge cap / slope /
+     * eave, closed underneath) extruded along X. Eaves sit at y 0 and the
+     * overhang hangs past both walls, so ONE renderable replaces the old
+     * two-tilted-boxes-plus-ridge assembly.
+     */
+    fun gableRoof(w: Float, d: Float, pitch: Float, overhang: Float): Mesh {
+        val key = floatArrayOf(w, d, pitch, overhang)
+        for ((k, m) in roofCache) if (k.contentEquals(key)) return m
+        val mesh = buildGableRoof(w, d, pitch, overhang)
+        roofCache.add(key to mesh)
+        return mesh
+    }
+
     private fun buildBox(): Mesh {
         val h = 0.5f
         val faces = arrayOf(
@@ -302,6 +360,361 @@ class AssetFactory(private val engine: Engine) {
         return variantIndices.map { idx ->
             registerMesh(vb, newIndexBuffer(idx), idx.size, bounds)
         }
+    }
+
+    // ---- v2.3 primitive builders --------------------------------------------
+
+    /** Flat-shaded triangle into shared growable buffers (winding as given). */
+    private fun emitTri(
+        positions: ArrayList<Float>, normals: ArrayList<Float>, indices: ArrayList<Int>,
+        a: FloatArray, b: FloatArray, c: FloatArray,
+    ) {
+        val e1x = b[0]-a[0]; val e1y = b[1]-a[1]; val e1z = b[2]-a[2]
+        val e2x = c[0]-a[0]; val e2y = c[1]-a[1]; val e2z = c[2]-a[2]
+        val nx = e1y*e2z - e1z*e2y
+        val ny = e1z*e2x - e1x*e2z
+        val nz = e1x*e2y - e1y*e2x
+        val len = sqrt(nx*nx + ny*ny + nz*nz).coerceAtLeast(1e-8f)
+        val base = positions.size / 3
+        for (p in arrayOf(a, b, c)) {
+            positions.add(p[0]); positions.add(p[1]); positions.add(p[2])
+            normals.add(nx/len); normals.add(ny/len); normals.add(nz/len)
+        }
+        indices.add(base); indices.add(base+1); indices.add(base+2)
+    }
+
+    /**
+     * Emits one subdivided quad per face with a per-vertex warp. The warp is
+     * a PURE function of position, so vertices shared between two faces land
+     * on the same warped point and the mesh stays watertight — the same trick
+     * buildRock's lattice jitter relies on.
+     */
+    private fun buildGridMesh(
+        faces: Array<Array<FloatArray>>, n: Int,
+        warp: (FloatArray) -> FloatArray, bounds: Box,
+    ): Mesh {
+        val positions = ArrayList<Float>(768); val normals = ArrayList<Float>(768); val indices = ArrayList<Int>(512)
+        for (quad in faces) {
+            val pts = Array(n) { i -> Array(n) { j ->
+                val u = i.toFloat()/(n-1); val v = j.toFloat()/(n-1)
+                val p = FloatArray(3)
+                for (k in 0..2) p[k] = quad[0][k]*(1-u)*(1-v)+quad[1][k]*u*(1-v)+quad[2][k]*u*v+quad[3][k]*(1-u)*v
+                warp(p)
+            }}
+            for (i in 0 until n-1) for (j in 0 until n-1) {
+                val a=pts[i][j]; val b=pts[i+1][j]; val c=pts[i+1][j+1]; val d=pts[i][j+1]
+                val nx=(b[1]-a[1])*(c[2]-a[2])-(b[2]-a[2])*(c[1]-a[1])
+                val ny=(b[2]-a[2])*(c[0]-a[0])-(b[0]-a[0])*(c[2]-a[2])
+                val nz=(b[0]-a[0])*(c[1]-a[1])-(b[1]-a[1])*(c[0]-a[0])
+                val len = sqrt(nx*nx+ny*ny+nz*nz).coerceAtLeast(1e-8f)
+                val base = positions.size/3
+                for (p in arrayOf(a,b,c,d)) {
+                    positions.add(p[0]); positions.add(p[1]); positions.add(p[2])
+                    normals.add(nx/len); normals.add(ny/len); normals.add(nz/len)
+                }
+                indices.add(base); indices.add(base+1); indices.add(base+2)
+                indices.add(base); indices.add(base+2); indices.add(base+3)
+            }
+        }
+        return registerMesh(newVertexBuffer(positions.toFloatArray(), normals.toFloatArray()), newIndexBuffer(indices), indices.size, bounds)
+    }
+
+    /** The 5 visible faces of the unit box (no bottom), 4 corners each. */
+    private fun boxFaceCorners(): Array<Array<FloatArray>> {
+        val h = 0.5f
+        return arrayOf(
+            arrayOf(floatArrayOf(-h,0f,h), floatArrayOf(h,0f,h), floatArrayOf(h,1f,h), floatArrayOf(-h,1f,h)),
+            arrayOf(floatArrayOf(h,0f,h), floatArrayOf(h,0f,-h), floatArrayOf(h,1f,-h), floatArrayOf(h,1f,h)),
+            arrayOf(floatArrayOf(h,0f,-h), floatArrayOf(-h,0f,-h), floatArrayOf(-h,1f,-h), floatArrayOf(h,1f,-h)),
+            arrayOf(floatArrayOf(-h,0f,-h), floatArrayOf(-h,0f,h), floatArrayOf(-h,1f,h), floatArrayOf(-h,1f,-h)),
+            arrayOf(floatArrayOf(-h,1f,h), floatArrayOf(h,1f,h), floatArrayOf(h,1f,-h), floatArrayOf(-h,1f,-h)),
+        )
+    }
+
+    private fun buildRoundedBox(): Mesh {
+        // Chamfered cube: clamp to the inner box, then push the offset back
+        // out to a fixed corner radius. Face centres are untouched, so it
+        // still stacks flush like a box — only the silhouette softens.
+        val rr = 0.18f
+        return buildGridMesh(boxFaceCorners(), 6, { p ->
+            val lim = 0.5f - rr
+            val qx = p[0].coerceIn(-lim, lim); val qy = p[1].coerceIn(-lim, lim); val qz = p[2].coerceIn(-lim, lim)
+            val dx = p[0]-qx; val dy = p[1]-qy; val dz = p[2]-qz
+            val len = sqrt(dx*dx+dy*dy+dz*dz)
+            if (len < 1e-5f) p else floatArrayOf(qx+rr*dx/len, qy+rr*dy/len, qz+rr*dz/len)
+        }, Box(floatArrayOf(0f,0.5f,0f), floatArrayOf(0.5f,0.5f,0.5f)))
+    }
+
+    private fun buildPrism(sides: Int, topScale: Float): Mesh {
+        val positions = ArrayList<Float>(256); val normals = ArrayList<Float>(256); val indices = ArrayList<Int>(192)
+        val twoPi = (2.0 * Math.PI).toFloat()
+        val bottom = Array(sides) { i ->
+            val a = i * twoPi / sides
+            floatArrayOf(cos(a)*0.5f, 0f, sin(a)*0.5f)
+        }
+        val top = Array(sides) { i ->
+            val a = i * twoPi / sides
+            floatArrayOf(cos(a)*0.5f*topScale, 1f, sin(a)*0.5f*topScale)
+        }
+        for (i in 0 until sides) {
+            val j = (i+1) % sides
+            // Side quad (b_i, t_i, t_j, b_j): outward winding.
+            emitTri(positions, normals, indices, bottom[i], top[i], top[j])
+            emitTri(positions, normals, indices, bottom[i], top[j], bottom[j])
+        }
+        if (topScale > 0.05f) {
+            val c = floatArrayOf(0f, 1f, 0f)
+            for (i in 0 until sides) emitTri(positions, normals, indices, c, top[(i+1)%sides], top[i])
+        }
+        val cb = floatArrayOf(0f, 0f, 0f)
+        for (i in 0 until sides) emitTri(positions, normals, indices, cb, bottom[i], bottom[(i+1)%sides])
+        return registerMesh(newVertexBuffer(positions.toFloatArray(), normals.toFloatArray()), newIndexBuffer(indices), indices.size, Box(floatArrayOf(0f,0.5f,0f), floatArrayOf(0.5f,0.5f,0.5f)))
+    }
+
+    private fun buildDome(): Mesh {
+        val seg = 8; val rings = 4; val r = 0.5f
+        val positions = FloatArray((rings+1)*(seg+1)*3)
+        val normals = FloatArray((rings+1)*(seg+1)*3)
+        var v = 0
+        for (i in 0..rings) {
+            val polar = Math.PI / 2.0 * i / rings
+            val sp = sin(polar).toFloat(); val cp = cos(polar).toFloat()
+            for (j in 0..seg) {
+                val az = 2.0 * Math.PI * j / seg
+                val sa = sin(az).toFloat(); val ca = cos(az).toFloat()
+                positions[v*3] = r*sp*ca; positions[v*3+1] = r*cp; positions[v*3+2] = r*sp*sa
+                normals[v*3] = sp*ca; normals[v*3+1] = cp; normals[v*3+2] = sp*sa
+                v++
+            }
+        }
+        val indices = ArrayList<Int>(seg*rings*6)
+        for (i in 0 until rings) for (j in 0 until seg) {
+            val a = i*(seg+1)+j; val b = a+seg+1
+            indices.add(a); indices.add(a+1); indices.add(b+1)
+            indices.add(a); indices.add(b+1); indices.add(b)
+        }
+        return registerMesh(newVertexBuffer(positions, normals), newIndexBuffer(indices), indices.size, Box(floatArrayOf(0f,0.25f,0f), floatArrayOf(0.5f,0.25f,0.5f)))
+    }
+
+    private fun buildGem(): Mesh {
+        val positions = ArrayList<Float>(96); val normals = ArrayList<Float>(96); val indices = ArrayList<Int>(24)
+        val ring = Array(4) { i ->
+            val a = Math.PI/4 + i * Math.PI/2
+            floatArrayOf(cos(a).toFloat()*0.5f, 0.4f, sin(a).toFloat()*0.5f)
+        }
+        val top = floatArrayOf(0f, 1f, 0f)
+        val bot = floatArrayOf(0f, 0f, 0f)
+        for (i in 0 until 4) {
+            val j = (i+1) % 4
+            emitTri(positions, normals, indices, ring[i], top, ring[j])
+            emitTri(positions, normals, indices, ring[i], ring[j], bot)
+        }
+        return registerMesh(newVertexBuffer(positions.toFloatArray(), normals.toFloatArray()), newIndexBuffer(indices), indices.size, Box(floatArrayOf(0f,0.5f,0f), floatArrayOf(0.5f,0.5f,0.5f)))
+    }
+
+    private fun buildArchPanel(): Mesh {
+        val w = 0.95f; val h = 0.60f
+        val cols = 7; val rows = 4
+        val positions = ArrayList<Float>(256); val normals = ArrayList<Float>(256); val indices = ArrayList<Int>(192)
+        fun topAt(x: Float): Float {
+            val k = (2f*x/w).coerceIn(-1f, 1f)
+            return h * (0.55f + 0.45f * sqrt(1f - k*k))
+        }
+        for (i in 0 until cols) {
+            val x0 = -w/2f + w*i/cols
+            val x1 = -w/2f + w*(i+1)/cols
+            val t0 = topAt(x0); val t1 = topAt(x1)
+            for (j in 0 until rows) {
+                val y00 = t0*j/rows; val y01 = t0*(j+1)/rows
+                val y10 = t1*j/rows; val y11 = t1*(j+1)/rows
+                // +z facing quad, CCW seen from the front.
+                val a = floatArrayOf(x0, y00, 0f); val b = floatArrayOf(x1, y10, 0f)
+                val c = floatArrayOf(x1, y11, 0f); val d = floatArrayOf(x0, y01, 0f)
+                emitTri(positions, normals, indices, a, b, c)
+                emitTri(positions, normals, indices, a, c, d)
+            }
+        }
+        return registerMesh(newVertexBuffer(positions.toFloatArray(), normals.toFloatArray()), newIndexBuffer(indices), indices.size, Box(floatArrayOf(0f,0.3f,0f), floatArrayOf(0.5f,0.31f,0.06f)))
+    }
+
+    private fun buildSail(): Mesh {
+        val y0 = 0.2f; val y1 = 2.5f
+        val bands = 5; val halfRoot = 0.24f; val halfTip = 0.12f; val t = 0.045f
+        val positions = ArrayList<Float>(256); val normals = ArrayList<Float>(256); val indices = ArrayList<Int>(192)
+        for (k in 0 until bands) {
+            val f0 = k.toFloat()/bands; val f1 = (k+1).toFloat()/bands
+            val ya = y0 + (y1-y0)*f0; val yb = y0 + (y1-y0)*f1
+            val wa = halfRoot + (halfTip-halfRoot)*f0; val wb = halfRoot + (halfTip-halfRoot)*f1
+            // +z face
+            emitTri(positions, normals, indices, floatArrayOf(-t,ya,wa), floatArrayOf(t,ya,wa), floatArrayOf(t,yb,wb))
+            emitTri(positions, normals, indices, floatArrayOf(-t,ya,wa), floatArrayOf(t,yb,wb), floatArrayOf(-t,yb,wb))
+            // -z face
+            emitTri(positions, normals, indices, floatArrayOf(t,ya,-wa), floatArrayOf(-t,ya,-wa), floatArrayOf(-t,yb,-wb))
+            emitTri(positions, normals, indices, floatArrayOf(t,ya,-wa), floatArrayOf(-t,yb,-wb), floatArrayOf(t,yb,-wb))
+            // +x edge
+            emitTri(positions, normals, indices, floatArrayOf(t,ya,wa), floatArrayOf(t,ya,-wa), floatArrayOf(t,yb,-wb))
+            emitTri(positions, normals, indices, floatArrayOf(t,ya,wa), floatArrayOf(t,yb,-wb), floatArrayOf(t,yb,wb))
+            // -x edge
+            emitTri(positions, normals, indices, floatArrayOf(-t,ya,-wa), floatArrayOf(-t,ya,wa), floatArrayOf(-t,yb,wb))
+            emitTri(positions, normals, indices, floatArrayOf(-t,ya,-wa), floatArrayOf(-t,yb,wb), floatArrayOf(-t,yb,-wb))
+        }
+        // Tip cap.
+        emitTri(positions, normals, indices, floatArrayOf(-t,y1,halfTip), floatArrayOf(t,y1,halfTip), floatArrayOf(t,y1,-halfTip))
+        emitTri(positions, normals, indices, floatArrayOf(-t,y1,halfTip), floatArrayOf(t,y1,-halfTip), floatArrayOf(-t,y1,-halfTip))
+        return registerMesh(newVertexBuffer(positions.toFloatArray(), normals.toFloatArray()), newIndexBuffer(indices), indices.size, Box(floatArrayOf(0f,1.35f,0f), floatArrayOf(0.06f,1.25f,0.28f)))
+    }
+
+    private fun buildCanopyBlob(seed: Int): Mesh {
+        val seg = 8; val rings = 5
+        val faces = ArrayList<Array<FloatArray>>(seg*rings)
+        for (i in 0 until rings) for (j in 0 until seg) {
+            fun pt(ii: Int, jj: Int): FloatArray {
+                val polar = Math.PI * ii / rings
+                val az = 2.0 * Math.PI * jj / seg
+                return floatArrayOf(
+                    (0.5f * sin(polar) * cos(az)).toFloat(),
+                    (0.5f * cos(polar)).toFloat(),
+                    (0.5f * sin(polar) * sin(az)).toFloat(),
+                )
+            }
+            faces.add(arrayOf(pt(i,j), pt(i,j+1), pt(i+1,j+1), pt(i+1,j)))
+        }
+        // Radial jitter keyed on the vertex lattice — pure function of p, so
+        // shared corners stay welded and the blob stays watertight.
+        return buildGridMesh(faces.toTypedArray(), 2, { p ->
+            val len = sqrt(p[0]*p[0]+p[1]*p[1]+p[2]*p[2]).coerceAtLeast(1e-6f)
+            val ix = Math.round(p[0]*6f); val iy = Math.round(p[1]*6f); val iz = Math.round(p[2]*6f)
+            val amt = (hash3(ix, iy, iz, seed*17+5) - 0.5f) * 0.13f
+            floatArrayOf(p[0] + p[0]/len*amt, p[1] + p[1]/len*amt, p[2] + p[2]/len*amt)
+        }, Box(floatArrayOf(0f,0f,0f), floatArrayOf(0.62f,0.62f,0.62f)))
+    }
+
+    private fun buildCliffSlab(seed: Int): Mesh {
+        // A box-like slab that tapers toward a craggy, jittered top — the
+        // canyon walls stop reading as stacked shipping containers.
+        return buildGridMesh(boxFaceCorners(), 4, { p ->
+            val up = (p[1] + 0.5f).coerceIn(0f, 1f)
+            val shrink = 1f - 0.22f*up
+            val ix = Math.round(p[0]*3f); val iy = Math.round(p[1]*3f); val iz = Math.round(p[2]*3f)
+            val jx = (hash3(ix, iy, iz, seed*13+1) - 0.5f) * 0.34f
+            val jy = (hash3(ix, iy, iz, seed*13+2) - 0.5f) * 0.22f
+            val jz = (hash3(ix, iy, iz, seed*13+3) - 0.5f) * 0.34f
+            floatArrayOf(p[0]*shrink + jx, p[1] + jy, p[2]*shrink + jz)
+        }, Box(floatArrayOf(0f,0.5f,0f), floatArrayOf(0.85f,0.65f,0.85f)))
+    }
+
+    private fun buildGableRoof(w: Float, d: Float, pitch: Float, overhang: Float): Mesh {
+        val d2 = d/2f + overhang
+        val rise = (d/2f) * tan(pitch) + 0.08f
+        val x0 = -w/2f - overhang; val x1 = w/2f + overhang
+        // Closed profile in (z, y), traversed so side normals face outward.
+        val profile = arrayOf(
+            floatArrayOf(-d2, 0f),   // left eave
+            floatArrayOf(-0.10f, rise), // left ridge cap edge
+            floatArrayOf(0.10f, rise),  // right ridge cap edge
+            floatArrayOf(d2, 0f),    // right eave
+        )
+        val order = intArrayOf(0, 3, 2, 1)  // eave L -> eave R -> ridge R -> ridge L
+        val positions = ArrayList<Float>(96); val normals = ArrayList<Float>(96); val indices = ArrayList<Int>(48)
+        for (k in order.indices) {
+            val a = profile[order[k]]; val b = profile[order[(k+1) % order.size]]
+            // Side quad extruded along X.
+            emitTri(positions, normals, indices,
+                floatArrayOf(x0, a[1], a[0]), floatArrayOf(x1, a[1], a[0]), floatArrayOf(x1, b[1], b[0]))
+            emitTri(positions, normals, indices,
+                floatArrayOf(x0, a[1], a[0]), floatArrayOf(x1, b[1], b[0]), floatArrayOf(x0, b[1], b[0]))
+        }
+        // End caps (both gable ends), profile order 0,1,2,3.
+        for (x in floatArrayOf(x0, x1)) {
+            val c0 = floatArrayOf(x, profile[0][1], profile[0][0])
+            val c1 = floatArrayOf(x, profile[1][1], profile[1][0])
+            val c2 = floatArrayOf(x, profile[2][1], profile[2][0])
+            val c3 = floatArrayOf(x, profile[3][1], profile[3][0])
+            if (x == x1) {
+                emitTri(positions, normals, indices, c0, c1, c2)
+                emitTri(positions, normals, indices, c0, c2, c3)
+            } else {
+                emitTri(positions, normals, indices, c0, c2, c1)
+                emitTri(positions, normals, indices, c0, c3, c2)
+            }
+        }
+        val halfX = w/2f + overhang + 0.15f
+        return registerMesh(newVertexBuffer(positions.toFloatArray(), normals.toFloatArray()), newIndexBuffer(indices), indices.size, Box(floatArrayOf(0f, rise/2f, 0f), floatArrayOf(halfX, rise/2f + 0.15f, d2 + 0.15f)))
+    }
+
+    /** A thin 3-sided grass blade leaning a little. */
+    private fun emitSpike(
+        positions: ArrayList<Float>, normals: ArrayList<Float>, indices: ArrayList<Int>,
+        cx: Float, cy: Float, cz: Float, r: Float, h: Float, yaw: Float, tilt: Float,
+    ) {
+        val apex = floatArrayOf(cx + sin(yaw)*tilt*h*0.5f, cy + h, cz + cos(yaw)*tilt*h*0.5f)
+        for (k in 0 until 3) {
+            val a0 = yaw + k * 2.0943951f
+            val a1 = yaw + (k+1) * 2.0943951f
+            val b0 = floatArrayOf(cx + cos(a0)*r, cy, cz + sin(a0)*r)
+            val b1 = floatArrayOf(cx + cos(a1)*r, cy, cz + sin(a1)*r)
+            emitTri(positions, normals, indices, b0, apex, b1)
+        }
+    }
+
+    /** A little 4-sided rock chip. */
+    private fun emitPyramid(
+        positions: ArrayList<Float>, normals: ArrayList<Float>, indices: ArrayList<Int>,
+        cx: Float, cy: Float, cz: Float, r: Float, h: Float, yaw: Float,
+    ) {
+        val apex = floatArrayOf(cx, cy + h, cz)
+        for (k in 0 until 4) {
+            val a0 = yaw + k * 1.5707964f
+            val a1 = yaw + (k+1) * 1.5707964f
+            val b0 = floatArrayOf(cx + cos(a0)*r, cy, cz + sin(a0)*r)
+            val b1 = floatArrayOf(cx + cos(a1)*r, cy, cz + sin(a1)*r)
+            emitTri(positions, normals, indices, b0, apex, b1)
+        }
+    }
+
+    private fun buildScatter(pebbles: Boolean): Mesh {
+        val rng = java.util.Random(if (pebbles) 8181 else 5150)
+        val positions = ArrayList<Float>(3072); val normals = ArrayList<Float>(3072); val indices = ArrayList<Int>(2304)
+        val target = if (pebbles) 70 else 170
+        var placed = 0
+        var attempts = 0
+        while (placed < target && attempts < 6000) {
+            attempts++
+            val x = WorldLayout.PLAY_X_MIN + 1.5f + rng.nextFloat() * (WorldLayout.PLAY_X_MAX - WorldLayout.PLAY_X_MIN - 3f)
+            val z = WorldLayout.PLAY_Z_MIN + 1.5f + rng.nextFloat() * (WorldLayout.PLAY_Z_MAX - WorldLayout.PLAY_Z_MIN - 3f)
+            if (WorldLayout.corridorOutsideDistance(x, z) > 3.5f) continue
+            if (WorldLayout.dist(x, z, WorldLayout.SPAWN_X, WorldLayout.SPAWN_Z) < 3.2f) continue
+            if (WorldLayout.dist(x, z, WorldLayout.TRADE_POST_X, WorldLayout.TRADE_POST_Z) < 4.2f) continue
+            if (WorldLayout.dist(x, z, WorldLayout.BIN_X, WorldLayout.BIN_Z) < 2.6f) continue
+            if (WorldLayout.dist(x, z, WorldLayout.FURNACE_X, WorldLayout.FURNACE_Z) < 3.4f) continue
+            if (WorldLayout.dist(x, z, WorldLayout.ANVIL_X, WorldLayout.ANVIL_Z) < 2.6f) continue
+            if (WorldLayout.dist(x, z, 0f, WorldLayout.GATE_Z) < 6.5f) continue
+            if (WorldLayout.dist(x, z, WorldLayout.ROAD_SOUTH_X, WorldLayout.ROAD_SOUTH_Z) < 3.2f) continue
+            if (WorldLayout.dist(x, z, Town.WELL_X, Town.WELL_Z) < 5f) continue
+            if (Town.slots.any { WorldLayout.dist(x, z, it.x, it.z) < 3.4f }) continue
+            val y = WorldLayout.groundHeight(x, z)
+            if (pebbles) {
+                val s = 0.06f + rng.nextFloat() * 0.07f
+                emitPyramid(positions, normals, indices, x, y - 0.02f, z, s, s * (0.5f + rng.nextFloat() * 0.4f), rng.nextFloat() * 6.2831853f)
+            } else {
+                for (b in 0 until 2) {
+                    emitSpike(
+                        positions, normals, indices,
+                        x + (rng.nextFloat()-0.5f)*0.5f, y - 0.02f, z + (rng.nextFloat()-0.5f)*0.5f,
+                        0.05f, 0.14f + rng.nextFloat() * 0.16f,
+                        rng.nextFloat() * 6.2831853f, (rng.nextFloat()-0.5f) * 0.35f,
+                    )
+                }
+            }
+            placed++
+        }
+        val x0 = WorldLayout.PLAY_X_MIN; val x1 = WorldLayout.PLAY_X_MAX
+        val z0 = WorldLayout.PLAY_Z_MIN; val z1 = WorldLayout.PLAY_Z_MAX
+        val bounds = Box(
+            floatArrayOf((x0+x1)/2f, 1.5f, (z0+z1)/2f),
+            floatArrayOf((x1-x0)/2f + 3f, 9f, (z1-z0)/2f + 3f),
+        )
+        return registerMesh(newVertexBuffer(positions.toFloatArray(), normals.toFloatArray()), newIndexBuffer(indices), indices.size, bounds)
     }
 
     /**

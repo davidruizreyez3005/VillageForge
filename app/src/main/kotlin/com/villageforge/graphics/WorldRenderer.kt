@@ -30,6 +30,12 @@ class WorldRenderer(private val engine: Engine, private val game: GameState) {
     private var indirectLight: IndirectLight? = null
     private var sky: Skybox? = null
 
+    // v2.3 — the smith's carried torch: a warm point light that follows the
+    // player and breathes with the flame once dusk gathers.
+    private val torchLightEntity: Int = EntityManager.get().create()
+    private var torchLightInstance = 0
+    private var torchLightInScene = false
+
     private val rockCount = game.rocks.size
     private val rockEntities = IntArray(rockCount)
     private val rockBase = Array(rockCount) { FloatArray(16) }
@@ -67,6 +73,7 @@ class WorldRenderer(private val engine: Engine, private val game: GameState) {
     private val wellVisible = IntArray(Town.wellTiers.size)
     private var windowInstance: MaterialInstance? = null
     private val windmillSailEntities = IntArray(4)
+    private val windmillSparEntities = IntArray(4)
     private var windmillHubX = 0f
     private var windmillHubY = 0f
     private var windmillHubZ = 0f
@@ -109,6 +116,7 @@ class WorldRenderer(private val engine: Engine, private val game: GameState) {
         buildLights()
         buildTerrain()
         buildCliffs()
+        buildScatter()
         buildGate()
         buildTrees()
         buildRocks()
@@ -151,6 +159,16 @@ class WorldRenderer(private val engine: Engine, private val game: GameState) {
             .falloff(9f)
             .build(engine, furnaceLightEntity)
         furnaceLightInstance = engine.lightManager.getInstance(furnaceLightEntity)
+
+        // v2.3 — the player's torch light. Created unlit; updateTorch() adds
+        // it to the scene and tracks the player as the evening comes on.
+        LightManager.Builder(LightManager.Type.POINT)
+            .color(Theme.TORCH_FLAME.r, Theme.TORCH_FLAME.g, Theme.TORCH_FLAME.b)
+            .intensity(0f)
+            .position(WorldLayout.SPAWN_X, 1.45f, WorldLayout.SPAWN_Z)
+            .falloff(11f)
+            .build(engine, torchLightEntity)
+        torchLightInstance = engine.lightManager.getInstance(torchLightEntity)
     }
 
     private fun buildTerrain() {
@@ -174,13 +192,15 @@ class WorldRenderer(private val engine: Engine, private val game: GameState) {
             val h = 7f + rng.nextFloat() * 6f
             val d = 4.5f + rng.nextFloat() * 2f
             val yaw = (rng.nextFloat() - 0.5f) * 8f
-            assets.addRenderable(scene, assets.box, instances[rng.nextInt(instances.size)],
+            // v2.3 — craggy tapered slabs instead of plain boxes.
+            val mesh = assets.cliffVariants[rng.nextInt(assets.cliffVariants.size)]
+            assets.addRenderable(scene, mesh, instances[rng.nextInt(instances.size)],
                 Transforms.trs(x + w / 2f, WorldLayout.groundHeight(x, z) - 0.6f, z, w, h, d, yaw))
             x += w - 0.8f
         }
     }
 
-    /** Cliff boxes stacked along a Z run at fixed X (for east/west walls). */
+    /** Cliff slabs stacked along a Z run at fixed X (for east/west walls). */
     private fun addCliffColumn(rng: Random, instances: List<MaterialInstance>, z0: Float, z1: Float, x: Float) {
         var z = z0
         while (z < z1) {
@@ -188,7 +208,8 @@ class WorldRenderer(private val engine: Engine, private val game: GameState) {
             val h = 7f + rng.nextFloat() * 6f
             val w = 4.5f + rng.nextFloat() * 2f
             val yaw = (rng.nextFloat() - 0.5f) * 8f
-            assets.addRenderable(scene, assets.box, instances[rng.nextInt(instances.size)],
+            val mesh = assets.cliffVariants[rng.nextInt(assets.cliffVariants.size)]
+            assets.addRenderable(scene, mesh, instances[rng.nextInt(instances.size)],
                 Transforms.trs(x, WorldLayout.groundHeight(x, z) - 0.6f, z + d / 2f, w, h, d, yaw))
             z += d - 0.8f
         }
@@ -208,21 +229,38 @@ class WorldRenderer(private val engine: Engine, private val game: GameState) {
         addCliffColumn(rng, instances, WorldLayout.HOLLOW_Z_MIN + 1f, WorldLayout.HOLLOW_Z_MAX + 1f, WorldLayout.HOLLOW_X_MIN - 1.5f)
     }
 
+    /** v2.3 — two merged meshes of grass tufts and pebble chips dressing the valley floor. */
+    private fun buildScatter() {
+        assets.addRenderable(
+            scene, assets.tuftScatter,
+            assets.material(Theme.GRASS_TUFT, Theme.ROUGHNESS_TERRAIN),
+            Transforms.trs(0f, 0f, 0f, 1f, 1f, 1f),
+            castShadows = false,
+        )
+        assets.addRenderable(
+            scene, assets.pebbleScatter,
+            assets.material(Theme.PEBBLE, Theme.ROUGHNESS_PROP),
+            Transforms.trs(0f, 0f, 0f, 1f, 1f, 1f),
+            castShadows = false,
+        )
+    }
+
     private fun buildGate() {
         val wood = assets.material(Theme.GATE_WOOD, Theme.ROUGHNESS_PROP)
         val trim = assets.material(Theme.STALL_TRIM, Theme.ROUGHNESS_PROP)
         lanternInstance = assets.material(Theme.LANTERN_GLOW, Theme.ROUGHNESS_PROP, Theme.METALLIC_DEFAULT, Theme.LANTERN_GLOW, 0.05f)
         val z = WorldLayout.GATE_Z
         val y = WorldLayout.groundHeight(0f, z)
+        // Posts are 6-sided timbers; the flames are gem-shaped now.
         for (dx in floatArrayOf(-6.2f, 6.2f)) {
-            assets.addRenderable(scene, assets.box, wood, Transforms.trs(dx, y, z, 0.5f, 3.6f, 0.5f))
+            assets.addRenderable(scene, assets.cyl6, wood, Transforms.trs(dx, y, z, 0.42f, 3.6f, 0.42f))
         }
-        assets.addRenderable(scene, assets.box, wood, Transforms.trs(0f, y + 3.5f, z, 13.2f, 0.4f, 0.5f))
+        assets.addRenderable(scene, assets.roundedBox, wood, Transforms.trs(0f, y + 3.5f, z, 13.2f, 0.4f, 0.5f))
         // Hanging sign board.
-        assets.addRenderable(scene, assets.box, trim, Transforms.trs(0f, y + 2.7f, z + 0.1f, 3.4f, 0.85f, 0.12f))
+        assets.addRenderable(scene, assets.roundedBox, trim, Transforms.trs(0f, y + 2.7f, z + 0.1f, 3.4f, 0.85f, 0.12f))
         // Torch flames on both posts.
         for (dx in floatArrayOf(-6.2f, 6.2f)) {
-            assets.addRenderable(scene, assets.box, lanternInstance!!, Transforms.trs(dx, y + 3.95f, z, 0.22f, 0.3f, 0.22f))
+            assets.addRenderable(scene, assets.gem, lanternInstance!!, Transforms.trs(dx, y + 3.9f, z, 0.24f, 0.38f, 0.24f))
         }
     }
 
@@ -235,28 +273,31 @@ class WorldRenderer(private val engine: Engine, private val game: GameState) {
             val scale = 0.85f + rng.nextFloat() * 0.5f
             val trunkHeight = 1.4f + rng.nextFloat() * 0.8f
             val y = WorldLayout.groundHeight(x, z) - 0.1f
-            assets.addRenderable(scene, assets.box, bark,
+            // v2.3 — round trunk + faceted canopy blobs.
+            assets.addRenderable(scene, assets.cyl6, bark,
                 Transforms.trs(x, y, z, 0.55f * scale, trunkHeight, 0.55f * scale, yaw))
             val c1 = 2.1f * scale
-            assets.addRenderable(scene, assets.box, canopies[rng.nextInt(canopies.size)],
-                Transforms.trs(x, y + trunkHeight - 0.15f, z, c1, c1 * 0.85f, c1, yaw + 3f))
+            val blob1 = assets.canopyBlobs[rng.nextInt(assets.canopyBlobs.size)]
+            assets.addRenderable(scene, blob1, canopies[rng.nextInt(canopies.size)],
+                Transforms.trs(x, y + trunkHeight - 0.15f + c1 * 0.425f, z, c1, c1 * 0.85f, c1, yaw + 3f))
             val c2 = 1.2f * scale
-            assets.addRenderable(scene, assets.box, canopies[rng.nextInt(canopies.size)],
-                Transforms.trs(x, y + trunkHeight + c1 * 0.85f - 0.35f, z, c2, c2, c2, yaw + 9f))
+            val blob2 = assets.canopyBlobs[rng.nextInt(assets.canopyBlobs.size)]
+            assets.addRenderable(scene, blob2, canopies[rng.nextInt(canopies.size)],
+                Transforms.trs(x, y + trunkHeight + c1 * 0.85f - 0.35f + c2 * 0.5f, z, c2, c2, c2, yaw + 9f))
         }
-        // Sparse dark pines inside the canyon.
+        // Sparse dark pines inside the canyon — proper conical layers now.
         val pineCanopies = Theme.PINE_CANOPY.map { assets.material(it, Theme.ROUGHNESS_PROP) }
         for ((x, z) in WorldLayout.canyonPines) {
             val yaw = rng.nextFloat() * 360f
             val scale = 0.8f + rng.nextFloat() * 0.4f
             val y = WorldLayout.groundHeight(x, z) - 0.1f
             val trunk = 1.9f * scale
-            assets.addRenderable(scene, assets.box, bark, Transforms.trs(x, y, z, 0.4f * scale, trunk, 0.4f * scale, yaw))
+            assets.addRenderable(scene, assets.cyl6, bark, Transforms.trs(x, y, z, 0.4f * scale, trunk, 0.4f * scale, yaw))
             var cy = y + trunk - 0.2f
             var c = 2.0f * scale
             for (layer in 0 until 3) {
-                assets.addRenderable(scene, assets.box, pineCanopies[rng.nextInt(pineCanopies.size)],
-                    Transforms.trs(x, cy, z, c, c * 0.7f, c, yaw + layer * 25f))
+                assets.addRenderable(scene, assets.cone6, pineCanopies[rng.nextInt(pineCanopies.size)],
+                    Transforms.trs(x, cy, z, c, c * 1.05f, c, yaw + layer * 25f))
                 cy += c * 0.45f
                 c *= 0.68f
             }
@@ -292,23 +333,23 @@ class WorldRenderer(private val engine: Engine, private val game: GameState) {
         val trim = assets.material(Theme.STALL_TRIM, Theme.ROUGHNESS_PROP)
         val awning = assets.material(Theme.STALL_AWNING, Theme.ROUGHNESS_PROP)
 
-        assets.addRenderable(scene, assets.box, wood, Transforms.trs(x, y, z, 2.0f, 0.95f, 0.9f))
-        assets.addRenderable(scene, assets.box, trim, Transforms.trs(x, y + 0.95f, z, 2.3f, 0.10f, 1.15f))
+        assets.addRenderable(scene, assets.roundedBox, wood, Transforms.trs(x, y, z, 2.0f, 0.95f, 0.9f))
+        assets.addRenderable(scene, assets.roundedBox, trim, Transforms.trs(x, y + 0.95f, z, 2.3f, 0.10f, 1.15f))
         for (dx in floatArrayOf(-1.05f, 1.05f)) {
             for (dz in floatArrayOf(-0.6f, 0.6f)) {
-                assets.addRenderable(scene, assets.box, wood, Transforms.trs(x + dx, y, z + dz, 0.14f, 2.4f, 0.14f))
+                assets.addRenderable(scene, assets.cyl6, wood, Transforms.trs(x + dx, y, z + dz, 0.14f, 2.4f, 0.14f))
             }
         }
-        assets.addRenderable(scene, assets.box, awning, Transforms.trs(x, y + 2.45f, z - 0.15f, 2.7f, 0.14f, 1.7f))
-        assets.addRenderable(scene, assets.box, trim, Transforms.trs(x, y + 2.45f, z + 0.55f, 2.7f, 0.14f, 0.28f))
+        assets.addRenderable(scene, assets.roundedBox, awning, Transforms.trs(x, y + 2.45f, z - 0.15f, 2.7f, 0.14f, 1.7f))
+        assets.addRenderable(scene, assets.roundedBox, trim, Transforms.trs(x, y + 2.45f, z + 0.55f, 2.7f, 0.14f, 0.28f))
 
         if (lanternInstance == null) {
             lanternInstance = assets.material(Theme.LANTERN_GLOW, Theme.ROUGHNESS_PROP, Theme.METALLIC_DEFAULT, Theme.LANTERN_GLOW, 0.05f)
         }
         for (dx in floatArrayOf(-1.75f, 1.75f)) {
             val lz = z + 1.3f
-            assets.addRenderable(scene, assets.box, wood, Transforms.trs(x + dx, y, lz, 0.13f, 2.1f, 0.13f))
-            assets.addRenderable(scene, assets.box, lanternInstance!!, Transforms.trs(x + dx, y + 2.25f, lz, 0.24f, 0.32f, 0.24f))
+            assets.addRenderable(scene, assets.cyl6, wood, Transforms.trs(x + dx, y, lz, 0.13f, 2.1f, 0.13f))
+            assets.addRenderable(scene, assets.gem, lanternInstance!!, Transforms.trs(x + dx, y + 2.2f, lz, 0.26f, 0.36f, 0.26f))
         }
     }
 
@@ -319,9 +360,9 @@ class WorldRenderer(private val engine: Engine, private val game: GameState) {
         val crate = assets.material(Theme.BIN_WOOD, Theme.ROUGHNESS_PROP)
         val lid = assets.material(Theme.BIN_LID, Theme.ROUGHNESS_PROP)
 
-        binCrateEntity = assets.addRenderable(scene, assets.box, crate,
+        binCrateEntity = assets.addRenderable(scene, assets.roundedBox, crate,
             Transforms.trs(x, y, z, 1.15f, 0.85f, 1.15f, 8f))
-        binLidEntity = assets.addRenderable(scene, assets.box, lid,
+        binLidEntity = assets.addRenderable(scene, assets.roundedBox, lid,
             Transforms.trs(x, y + 0.85f, z, 1.3f, 0.12f, 1.3f, -4f))
 
         binVisible = game.binOwned
@@ -342,25 +383,25 @@ class WorldRenderer(private val engine: Engine, private val game: GameState) {
             emissive = Theme.FURNACE_EMBER, emissiveStrength = 0.5f,
         )
 
-        // Stone furnace body with a shrinking chimney.
-        furnaceEntities.add(assets.addRenderable(scene, assets.box, stone, Transforms.trs(fx, gy, fz, 1.8f, 1.3f, 1.6f)))
-        furnaceEntities.add(assets.addRenderable(scene, assets.box, stone, Transforms.trs(fx, gy + 1.3f, fz, 1.4f, 0.7f, 1.2f)))
-        furnaceEntities.add(assets.addRenderable(scene, assets.box, stoneDark, Transforms.trs(fx, gy + 2.0f, fz, 0.95f, 1.5f, 0.95f)))
-        furnaceEntities.add(assets.addRenderable(scene, assets.box, stoneDark, Transforms.trs(fx, gy + 3.5f, fz, 0.7f, 0.4f, 0.7f)))
-        // Glowing mouth on the +z face.
-        furnaceEntities.add(assets.addRenderable(scene, assets.box, mouthInstance!!, Transforms.trs(fx, gy + 0.62f, fz + 0.72f, 0.95f, 0.58f, 0.28f)))
+        // Stone furnace body with a tapering round chimney and an arched mouth.
+        furnaceEntities.add(assets.addRenderable(scene, assets.roundedBox, stone, Transforms.trs(fx, gy, fz, 1.8f, 1.3f, 1.6f)))
+        furnaceEntities.add(assets.addRenderable(scene, assets.roundedBox, stone, Transforms.trs(fx, gy + 1.3f, fz, 1.4f, 0.7f, 1.2f)))
+        furnaceEntities.add(assets.addRenderable(scene, assets.taper8, stoneDark, Transforms.trs(fx, gy + 2.0f, fz, 0.95f, 1.5f, 0.95f)))
+        furnaceEntities.add(assets.addRenderable(scene, assets.roundedBox, stoneDark, Transforms.trs(fx, gy + 3.5f, fz, 0.7f, 0.4f, 0.7f)))
+        // Glowing arched mouth on the +z face.
+        furnaceEntities.add(assets.addRenderable(scene, assets.archPanel, mouthInstance!!, Transforms.trs(fx, gy + 0.32f, fz + 0.81f, 1f, 1f, 1f)))
 
         // Anvil on a stump beside it.
         val ax = WorldLayout.ANVIL_X
         val az = WorldLayout.ANVIL_Z
         val ay = WorldLayout.groundHeight(ax, az)
-        furnaceEntities.add(assets.addRenderable(scene, assets.box, stump, Transforms.trs(ax, ay, az, 0.55f, 0.5f, 0.55f)))
-        furnaceEntities.add(assets.addRenderable(scene, assets.box, anvil, Transforms.trs(ax, ay + 0.5f, az, 0.30f, 0.30f, 0.30f)))
-        furnaceEntities.add(assets.addRenderable(scene, assets.box, anvil, Transforms.trs(ax, ay + 0.8f, az, 0.78f, 0.22f, 0.34f)))
-        // Coal pile.
+        furnaceEntities.add(assets.addRenderable(scene, assets.roundedBox, stump, Transforms.trs(ax, ay, az, 0.55f, 0.5f, 0.55f)))
+        furnaceEntities.add(assets.addRenderable(scene, assets.roundedBox, anvil, Transforms.trs(ax, ay + 0.5f, az, 0.30f, 0.30f, 0.30f)))
+        furnaceEntities.add(assets.addRenderable(scene, assets.roundedBox, anvil, Transforms.trs(ax, ay + 0.8f, az, 0.78f, 0.22f, 0.34f)))
+        // Coal pile — little rock chunks.
         for (i in 0 until 3) {
-            furnaceEntities.add(assets.addRenderable(scene, assets.box, coal,
-                Transforms.trs(fx + 1.2f, gy + 0.08f, fz - 0.4f + i * 0.35f, 0.55f, 0.28f, 0.45f, i * 30f)))
+            furnaceEntities.add(assets.addRenderable(scene, assets.rockVariants[i % assets.rockVariants.size], coal,
+                Transforms.trs(fx + 1.35f, gy - 0.08f, fz - 0.4f + i * 0.35f, 0.34f, 0.30f, 0.34f, i * 30f)))
         }
 
         furnaceVisible = game.furnaceOwned
@@ -382,7 +423,7 @@ class WorldRenderer(private val engine: Engine, private val game: GameState) {
     private fun buildHollow() {
         val rng = Random(2121)
 
-        // Emissive crystal clusters: 2-3 tilted shards each, alternating hues.
+        // Emissive crystal clusters: 2-3 tilted gem shards each, alternating hues.
         for ((cx, cz, scale) in WorldLayout.crystalClusters) {
             val base = WorldLayout.groundHeight(cx, cz)
             val hue = if ((cx * 7f + cz).toInt() % 2 == 0) Theme.CRYSTAL_A else Theme.CRYSTAL_B
@@ -394,16 +435,16 @@ class WorldRenderer(private val engine: Engine, private val game: GameState) {
             val shards = 2 + (rng.nextInt(2))
             for (s in 0 until shards) {
                 val h = (0.7f + rng.nextFloat() * 0.9f) * scale
-                val w = 0.28f * scale * (1f - 0.25f * s)
+                val w = 0.30f * scale * (1f - 0.25f * s)
                 val yaw = rng.nextFloat() * 90f + 15f
                 val ox = (rng.nextFloat() - 0.5f) * 1.1f
                 val oz = (rng.nextFloat() - 0.5f) * 1.1f
-                assets.addRenderable(scene, assets.box, instance,
+                assets.addRenderable(scene, assets.gem, instance,
                     Transforms.trs(cx + ox, base, cz + oz, w, h, w, yaw))
             }
         }
 
-        // The great crystal monolith: three stacked, rotated prisms + light.
+        // The great crystal monolith: three stacked, rotated tapers + light.
         val mx = WorldLayout.MONOLITH_X
         val mz = WorldLayout.MONOLITH_Z
         val my = WorldLayout.groundHeight(mx, mz)
@@ -411,9 +452,9 @@ class WorldRenderer(private val engine: Engine, private val game: GameState) {
             Theme.MONOLITH, Theme.ROUGHNESS_ORE, Theme.METALLIC_ORE,
             emissive = Theme.MONOLITH, emissiveStrength = 0.6f,
         )
-        assets.addRenderable(scene, assets.box, monolithInstance!!, Transforms.trs(mx, my, mz, 1.5f, 3.6f, 1.5f, 18f))
-        assets.addRenderable(scene, assets.box, monolithInstance!!, Transforms.trs(mx, my + 3.4f, mz, 1.05f, 2.2f, 1.05f, -12f))
-        assets.addRenderable(scene, assets.box, monolithInstance!!, Transforms.trs(mx, my + 5.4f, mz, 0.62f, 1.4f, 0.62f, 40f))
+        assets.addRenderable(scene, assets.taper8, monolithInstance!!, Transforms.trs(mx, my, mz, 1.5f, 3.6f, 1.5f, 18f))
+        assets.addRenderable(scene, assets.taper8, monolithInstance!!, Transforms.trs(mx, my + 3.4f, mz, 1.05f, 2.2f, 1.05f, -12f))
+        assets.addRenderable(scene, assets.taper8, monolithInstance!!, Transforms.trs(mx, my + 5.4f, mz, 0.62f, 1.4f, 0.62f, 40f))
         LightManager.Builder(LightManager.Type.POINT)
             .color(Theme.CRYSTAL_A.r, Theme.CRYSTAL_A.g, Theme.CRYSTAL_A.b)
             .intensity(900f)
@@ -429,19 +470,19 @@ class WorldRenderer(private val engine: Engine, private val game: GameState) {
         val ey = WorldLayout.groundHeight(ex, ez)
         val timber = assets.material(Theme.MINE_TIMBER, Theme.ROUGHNESS_PROP)
         val dark = assets.material(Theme.MINE_DARK, Theme.ROUGHNESS_PROP)
-        assets.addRenderable(scene, assets.box, dark, Transforms.trs(ex, ey, ez, 3.2f, 2.6f, 1.2f))
+        assets.addRenderable(scene, assets.roundedBox, dark, Transforms.trs(ex, ey, ez, 3.2f, 2.6f, 1.2f))
         for (dx in floatArrayOf(-1.5f, 1.5f)) {
-            assets.addRenderable(scene, assets.box, timber, Transforms.trs(ex + dx, ey, ez, 0.4f, 2.6f, 0.4f))
+            assets.addRenderable(scene, assets.cyl6, timber, Transforms.trs(ex + dx, ey, ez, 0.42f, 2.6f, 0.42f))
         }
-        assets.addRenderable(scene, assets.box, timber, Transforms.trs(ex, ey + 2.5f, ez, 3.5f, 0.4f, 0.5f))
+        assets.addRenderable(scene, assets.roundedBox, timber, Transforms.trs(ex, ey + 2.5f, ez, 3.5f, 0.4f, 0.5f))
 
-        // Weathered standing stones.
+        // Weathered standing stones — round-shouldered tapers now.
         val stone = assets.material(Theme.STANDING_STONE, Theme.ROUGHNESS_PROP)
         for ((sx, sz, h) in WorldLayout.standingStones) {
             val sy = WorldLayout.groundHeight(sx, sz)
             val yaw = rng.nextFloat() * 360f
-            assets.addRenderable(scene, assets.box, stone, Transforms.trs(sx, sy, sz, 0.7f, h, 0.45f, yaw))
-            assets.addRenderable(scene, assets.box, stone, Transforms.trs(sx, sy + h, sz, 0.95f, 0.25f, 0.6f, yaw + 20f))
+            assets.addRenderable(scene, assets.taper8, stone, Transforms.trs(sx, sy, sz, 0.75f, h, 0.5f, yaw))
+            assets.addRenderable(scene, assets.roundedBox, stone, Transforms.trs(sx, sy + h, sz, 0.95f, 0.25f, 0.6f, yaw + 20f))
         }
 
         // Lantern posts marking the link mouth — the trail into the hollow.
@@ -452,8 +493,8 @@ class WorldRenderer(private val engine: Engine, private val game: GameState) {
         for (lx in floatArrayOf(-31.5f, -17.5f)) {
             val lz = WorldLayout.LINK_Z_MAX + 2.2f
             val ly = WorldLayout.groundHeight(lx, lz)
-            assets.addRenderable(scene, assets.box, wood, Transforms.trs(lx, ly, lz, 0.14f, 2.3f, 0.14f))
-            assets.addRenderable(scene, assets.box, lanternInstance!!, Transforms.trs(lx, ly + 2.45f, lz, 0.26f, 0.34f, 0.26f))
+            assets.addRenderable(scene, assets.cyl6, wood, Transforms.trs(lx, ly, lz, 0.15f, 2.3f, 0.15f))
+            assets.addRenderable(scene, assets.gem, lanternInstance!!, Transforms.trs(lx, ly + 2.38f, lz, 0.28f, 0.38f, 0.28f))
         }
     }
 
@@ -462,32 +503,24 @@ class WorldRenderer(private val engine: Engine, private val game: GameState) {
     private fun addPart(
         group: ArrayList<Int>, x: Float, y: Float, z: Float,
         w: Float, h: Float, d: Float, instance: MaterialInstance, yaw: Float = FACING,
+        mesh: AssetFactory.Mesh = assets.roundedBox,
     ): Int {
-        val e = assets.addRenderable(scene, assets.box, instance, Transforms.trs(x, y, z, w, h, d, yaw))
+        val e = assets.addRenderable(scene, mesh, instance, Transforms.trs(x, y, z, w, h, d, yaw))
         group.add(e)
         return e
     }
 
-    /** A pitched two-slope roof: the one flourish the box world allows. */
-    private fun addRoof(group: ArrayList<Int>, x: Float, y: Float, z: Float, w: Float, d: Float, instance: MaterialInstance, yaw: Float = FACING) {
-        val a = ROOF_PITCH
-        val rise = (d / 2f) * tan(a)
-        val len = (d / 2f) / cos(a) + 0.28f
-        val yawRad = Math.toRadians(yaw.toDouble()).toFloat()
-        val c = cos(yawRad); val s = sin(yawRad)
-        for (side in floatArrayOf(1f, -1f)) {
-            // Slope midpoint: half-way between ridge (z=0) and eave (z=±d/2),
-            // rotated into the building's facing.
-            val mx = x + side * (d / 4f) * s
-            val mz = z + side * (d / 4f) * c
-            Transforms.rootInto(roofM, mx, y + rise / 2f - 0.06f, mz, yawRad, side * a)
-            Transforms.scale(roofM2, w + 0.5f, 0.16f, len)
-            Transforms.multiply(roofM3, roofM, roofM2)
-            val e = assets.addRenderable(scene, assets.box, instance, roofM3.copyOf())
-            group.add(e)
-        }
-        // Ridge cap along the roof line.
-        addPart(group, x, y + rise - 0.02f, z, 0.24f, 0.18f, d + 0.3f, instance, yaw)
+    /**
+     * v2.3 — a proper solid gable-roof mesh (one renderable) instead of two
+     * tilted boxes and a ridge cap: real eaves, real ridge, capped gable ends.
+     */
+    private fun addRoof(
+        group: ArrayList<Int>, x: Float, y: Float, z: Float, w: Float, d: Float,
+        instance: MaterialInstance, yaw: Float = FACING, pitch: Float = ROOF_PITCH,
+    ) {
+        val mesh = assets.gableRoof(w, d, pitch, 0.30f)
+        val e = assets.addRenderable(scene, mesh, instance, Transforms.trs(x, y, z, 1f, 1f, 1f, yaw))
+        group.add(e)
     }
 
     /** Stage 0 of a house: a dug plot with stacked timber waiting. */
@@ -497,7 +530,7 @@ class WorldRenderer(private val engine: Engine, private val game: GameState) {
         val wood = assets.material(Theme.TIMBER, Theme.ROUGHNESS_PROP)
         addPart(group, x, y, z, 2.8f, 0.08f, 2.4f, soil, 0f)
         for (dx in floatArrayOf(-1.2f, 1.2f)) for (dz in floatArrayOf(-1.0f, 1.0f)) {
-            addPart(group, x + dx, y, z + dz, 0.13f, 1.0f, 0.13f, wood)
+            addPart(group, x + dx, y, z + dz, 0.13f, 1.0f, 0.13f, wood, FACING, assets.cyl6)
         }
         addPart(group, x - 0.3f, y + 0.1f, z, 1.6f, 0.22f, 0.5f, wood)
         addPart(group, x + 0.4f, y + 0.1f, z + 0.2f, 1.1f, 0.22f, 0.5f, wood, FACING + 8f)
@@ -521,8 +554,8 @@ class WorldRenderer(private val engine: Engine, private val game: GameState) {
         addPart(group, x, y, z, w, wallH, d, plaster)
         // Corner posts + a door and two shuttered windows on the street face.
         for (dx in floatArrayOf(-w / 2f + 0.07f, w / 2f - 0.07f)) {
-            addPart(group, x + dx, y, z - d / 2f + 0.07f, 0.15f, wallH, 0.15f, timber)
-            addPart(group, x + dx, y, z + d / 2f - 0.07f, 0.15f, wallH, 0.15f, timber)
+            addPart(group, x + dx, y, z - d / 2f + 0.07f, 0.15f, wallH, 0.15f, timber, FACING, assets.cyl6)
+            addPart(group, x + dx, y, z + d / 2f - 0.07f, 0.15f, wallH, 0.15f, timber, FACING, assets.cyl6)
         }
         addPart(group, x - w / 4f, y, z + d / 2f + 0.02f, 0.62f, 1.25f, 0.1f, door)
         addPart(group, x + w / 4f, y + 0.75f, z + d / 2f + 0.03f, 0.5f, 0.55f, 0.06f, windowInstance!!, yaw = FACING)
@@ -531,7 +564,7 @@ class WorldRenderer(private val engine: Engine, private val game: GameState) {
         addRoof(group, x, y + wallH + 0.2f, z, w, d, roof)
         // Chimney on the longhouse.
         if (longhouse) {
-            addPart(group, x - w / 3f, y + wallH + 0.2f, z - d / 5f, 0.34f, 1.5f, 0.34f, assets.material(Theme.WELL_STONE, Theme.ROUGHNESS_PROP))
+            addPart(group, x - w / 3f, y + wallH + 0.2f, z - d / 5f, 0.36f, 1.5f, 0.36f, assets.material(Theme.WELL_STONE, Theme.ROUGHNESS_PROP), FACING, assets.taper8)
         }
     }
 
@@ -539,9 +572,9 @@ class WorldRenderer(private val engine: Engine, private val game: GameState) {
         val y = WorldLayout.groundHeight(x, z)
         val wood = assets.material(Theme.GATE_WOOD, Theme.ROUGHNESS_PROP)
         lanternInstance = lanternInstance ?: assets.material(Theme.LANTERN_GLOW, Theme.ROUGHNESS_PROP, Theme.METALLIC_DEFAULT, Theme.LANTERN_GLOW, 0.05f)
-        addPart(group, x, y, z, 0.14f, 2.15f, 0.14f, wood, 0f)
+        addPart(group, x, y, z, 0.15f, 2.15f, 0.15f, wood, 0f, assets.cyl6)
         addPart(group, x, y + 2.15f, z, 0.30f, 0.08f, 0.30f, wood, 0f)
-        addPart(group, x, y + 2.26f, z, 0.26f, 0.36f, 0.26f, lanternInstance!!, 0f)
+        addPart(group, x, y + 2.24f, z, 0.26f, 0.38f, 0.26f, lanternInstance!!, 0f, assets.gem)
     }
 
     private fun buildField(group: ArrayList<Int>, x: Float, z: Float) {
@@ -554,11 +587,11 @@ class WorldRenderer(private val engine: Engine, private val game: GameState) {
             addPart(group, x, y + 0.08f, z - 0.8f + row * 0.8f, 2.5f, 0.16f, 0.42f, soil, 0f)
             for (i in 0 until 4) {
                 val wx = x - 1.0f + i * 0.66f + (row % 2) * 0.18f
-                addPart(group, wx, y + 0.2f, z - 0.8f + row * 0.8f, 0.2f, 0.55f, 0.14f, wheat, 0f)
+                addPart(group, wx, y + 0.2f, z - 0.8f + row * 0.8f, 0.18f, 0.6f, 0.18f, wheat, 0f, assets.cone4)
             }
         }
         for (dx in floatArrayOf(-1.35f, 1.35f)) for (dz in floatArrayOf(-1.2f, 1.2f)) {
-            addPart(group, x + dx, y, z + dz, 0.12f, 0.7f, 0.12f, wood, 0f)
+            addPart(group, x + dx, y, z + dz, 0.12f, 0.7f, 0.12f, wood, 0f, assets.cyl6)
         }
     }
 
@@ -569,10 +602,10 @@ class WorldRenderer(private val engine: Engine, private val game: GameState) {
         val timber = assets.material(Theme.TIMBER, Theme.ROUGHNESS_PROP)
         // Raised on posts so the grain stays dry.
         for (dx in floatArrayOf(-0.95f, 0.95f)) for (dz in floatArrayOf(-0.75f, 0.75f)) {
-            addPart(group, x + dx, y, z + dz, 0.15f, 1.0f, 0.15f, timber)
+            addPart(group, x + dx, y, z + dz, 0.16f, 1.0f, 0.16f, timber, FACING, assets.cyl6)
         }
         addPart(group, x, y + 1.0f, z, 2.3f, 1.15f, 1.9f, wood)
-        addRoof(group, x, y + 2.1f, z, 2.3f, 1.9f, thatch)
+        addRoof(group, x, y + 2.15f, z, 2.3f, 1.9f, thatch)
         // A little ladder up the side.
         addPart(group, x - 1.2f, y + 0.2f, z + 0.55f, 0.08f, 1.9f, 0.08f, timber, 12f)
         addPart(group, x - 1.2f, y + 0.2f, z - 0.15f, 0.08f, 1.9f, 0.08f, timber, 12f)
@@ -585,13 +618,12 @@ class WorldRenderer(private val engine: Engine, private val game: GameState) {
         val timber = assets.material(Theme.TIMBER, Theme.ROUGHNESS_PROP)
         val sail = assets.material(Theme.SAIL_CLOTH, Theme.ROUGHNESS_PROP)
         val metal = assets.material(Theme.ANVIL, Theme.ROUGHNESS_METAL, Theme.METALLIC_INGOT)
-        // Tapered tower in three lifts.
-        addPart(group, x, y, z, 2.1f, 2.4f, 2.1f, plaster)
-        addPart(group, x, y + 2.4f, z, 1.7f, 2.0f, 1.7f, plaster)
-        addPart(group, x, y + 4.4f, z, 1.3f, 1.6f, 1.3f, plaster)
-        for (lift in 0 until 2) addPart(group, x, y + lift * 2.2f + 2.1f, z, 2.2f - lift * 0.4f, 0.14f, 2.2f - lift * 0.4f, timber)
-        // Cap + door + window.
-        addPart(group, x, y + 6.0f, z, 1.5f, 0.8f, 1.5f, timber, 22f)
+        // v2.3 — one smooth tapered round tower instead of three stacked boxes.
+        addPart(group, x, y, z, 2.1f, 6.0f, 2.1f, plaster, FACING, assets.prism(8, 0.62f))
+        // Timber band rings where the old lifts met.
+        for (lift in 0 until 2) addPart(group, x, y + lift * 2.2f + 2.1f, z, 2.2f - lift * 0.4f, 0.14f, 2.2f - lift * 0.4f, timber, FACING, assets.cyl8)
+        // Dome cap + door + window.
+        addPart(group, x, y + 6.0f, z, 1.5f, 0.85f, 1.5f, timber, FACING, assets.dome)
         addPart(group, x, y, z + 1.0f, 0.7f, 1.3f, 0.1f, assets.material(Theme.DOOR_WOOD, Theme.ROUGHNESS_PROP))
         windowInstance = windowInstance ?: assets.material(
             Theme.WINDOW_GLOW, Theme.ROUGHNESS_PROP, Theme.METALLIC_DEFAULT,
@@ -603,16 +635,21 @@ class WorldRenderer(private val engine: Engine, private val game: GameState) {
         windmillHubY = y + 5.1f
         windmillHubZ = z
         addPart(group, windmillHubX - 0.3f, windmillHubY - 0.25f, windmillHubZ, 0.9f, 0.5f, 0.5f, timber)
-        val hub = assets.addRenderable(scene, assets.box, metal, Transforms.trs(windmillHubX, windmillHubY - 0.25f, windmillHubZ - 0.25f, 0.36f, 0.36f, 0.36f))
+        val hub = assets.addRenderable(scene, assets.cyl6, metal, Transforms.trs(windmillHubX, windmillHubY - 0.25f, windmillHubZ - 0.25f, 0.36f, 0.36f, 0.36f))
         group.add(hub)
+        // v2.3 — tapered cloth sails (single slab meshes) + a wooden spar each.
+        val park = Transforms.trs(windmillHubX, -100f, windmillHubZ, 0.001f, 0.001f, 0.001f)
         for (i in 0 until 4) {
             val e = assets.addRenderable(
-                scene, assets.box, sail,
-                Transforms.trs(windmillHubX, -100f, windmillHubZ, 0.001f, 0.001f, 0.001f),
+                scene, assets.sail, sail,
+                park.copyOf(),
                 castShadows = true,
             )
             windmillSailEntities[i] = e
             group.add(e)
+            val spar = assets.addRenderable(scene, assets.cyl6, timber, park.copyOf())
+            windmillSparEntities[i] = spar
+            group.add(spar)
         }
     }
 
@@ -627,38 +664,45 @@ class WorldRenderer(private val engine: Engine, private val game: GameState) {
         )
         // Nave.
         addPart(group, x, y, z, 2.5f, 3.0f, 3.3f, stone)
-        addRoof(group, x, y + 3.0f, z, 2.5f, 3.3f, roof)
+        addRoof(group, x, y + 3.0f, z, 2.5f, 3.3f, roof, pitch = 0.68f)
         // Buttresses down both flanks.
         for (dz in floatArrayOf(-1.1f, 0.2f)) for (dx in floatArrayOf(-1.35f, 1.35f)) {
-            addPart(group, x + dx, y, z + dz, 0.3f, 1.7f, 0.34f, stone)
+            addPart(group, x + dx, y, z + dz, 0.32f, 1.7f, 0.36f, stone, FACING, assets.taper8)
         }
         // Door of two orders + a rose window.
         addPart(group, x - 0.55f, y, z + 1.65f, 0.28f, 1.5f, 0.14f, stone)
         addPart(group, x + 0.55f, y, z + 1.65f, 0.28f, 1.5f, 0.14f, stone)
         addPart(group, x, y + 1.55f, z + 1.68f, 0.5f, 0.34f, 0.1f, dark)
-        addPart(group, x, y + 2.0f, z + 1.68f, 0.66f, 0.66f, 0.08f, windowInstance!!)
+        addPart(group, x, y + 1.95f, z + 1.68f, 0.38f, 0.55f, 0.08f, windowInstance!!, FACING, assets.gem)
         // Bell tower + open belfry + spire.
-        addPart(group, x - 1.5f, y, z - 1.6f, 1.1f, 4.2f, 1.1f, stone)
+        addPart(group, x - 1.5f, y, z - 1.6f, 1.1f, 4.2f, 1.1f, stone, FACING, assets.prism(8, 0.78f))
         addPart(group, x - 1.5f, y + 4.2f, z - 1.6f, 1.3f, 0.22f, 1.3f, stone)
         for (dx in floatArrayOf(-0.45f, 0.45f)) for (dz in floatArrayOf(-0.45f, 0.45f)) {
-            addPart(group, x - 1.5f + dx, y + 4.4f, z - 1.6f + dz, 0.14f, 0.7f, 0.14f, dark)
+            addPart(group, x - 1.5f + dx, y + 4.4f, z - 1.6f + dz, 0.14f, 0.7f, 0.14f, dark, FACING, assets.cyl6)
         }
         // The bell itself, hanging where it can be seen.
-        addPart(group, x - 1.5f, y + 4.7f, z - 1.6f, 0.28f, 0.34f, 0.28f, assets.material(Theme.ORE_GOLD, Theme.ROUGHNESS_METAL, Theme.METALLIC_INGOT))
-        addPart(group, x - 1.5f, y + 5.1f, z - 1.6f, 1.0f, 0.9f, 1.0f, roof, 22f)
-        addPart(group, x - 1.5f, y + 6.0f, z - 1.6f, 0.6f, 1.0f, 0.6f, roof, 45f)
-        addPart(group, x - 1.5f, y + 7.0f, z - 1.6f, 0.16f, 0.7f, 0.16f, dark)
+        addPart(group, x - 1.5f, y + 4.7f, z - 1.6f, 0.30f, 0.36f, 0.30f, assets.material(Theme.ORE_GOLD, Theme.ROUGHNESS_METAL, Theme.METALLIC_INGOT), FACING, assets.taper8)
+        addPart(group, x - 1.5f, y + 5.05f, z - 1.6f, 1.0f, 0.95f, 1.0f, roof, FACING, assets.cone6)
+        addPart(group, x - 1.5f, y + 6.0f, z - 1.6f, 0.6f, 1.0f, 0.6f, roof, FACING, assets.cone6)
+        addPart(group, x - 1.5f, y + 7.0f, z - 1.6f, 0.16f, 0.7f, 0.16f, dark, FACING, assets.cyl6)
     }
 
-    /** Era 0 — the plaza pad and the low stone ring of the first well. */
+    /** Era 0 — the plaza pad and the low octagonal ring of the first well. */
     private fun buildWellCore(group: ArrayList<Int>, x: Float, z: Float) {
         val y = WorldLayout.groundHeight(x, z) - 0.02f
         val stone = assets.material(Theme.WELL_STONE, Theme.ROUGHNESS_PROP)
         val water = assets.material(Theme.WELL_WATER, Theme.ROUGHNESS_PROP)
         addPart(group, x, y, z, 5.5f, 0.07f, 5.5f, assets.material(Theme.PATH, Theme.ROUGHNESS_TERRAIN), 0f)
-        for (dz in floatArrayOf(-0.55f, 0.55f)) addPart(group, x, y, z + dz, 1.5f, 0.55f, 0.3f, stone, 0f)
-        for (dx in floatArrayOf(-0.55f, 0.55f)) addPart(group, x + dx, y, z, 0.3f, 0.55f, 1.5f, stone, 0f)
-        addPart(group, x, y + 0.18f, z, 1.0f, 0.06f, 1.0f, water, 0f)
+        // v2.3 — an eight-segment octagon instead of four straight walls.
+        for (k in 0 until 8) {
+            val a = k * 0.78539816f
+            addPart(
+                group, x + cos(a) * 0.78f, y, z + sin(a) * 0.78f,
+                0.64f, 0.55f, 0.30f, stone,
+                90f - Math.toDegrees(a.toDouble()).toFloat(),
+            )
+        }
+        addPart(group, x, y + 0.18f, z, 1.3f, 0.06f, 1.3f, water, 0f, assets.cyl8)
     }
 
     /** Era 1 — a proper stone well: raised rim, apron, and the market paths. */
@@ -667,8 +711,14 @@ class WorldRenderer(private val engine: Engine, private val game: GameState) {
         val stone = assets.material(Theme.WELL_STONE, Theme.ROUGHNESS_PROP)
         val path = assets.material(Theme.PATH, Theme.ROUGHNESS_TERRAIN)
         buildWellCore(group, x, z)
-        for (dz in floatArrayOf(-0.55f, 0.55f)) addPart(group, x, y + 0.55f, z + dz, 1.5f, 0.3f, 0.32f, stone, 0f)
-        for (dx in floatArrayOf(-0.55f, 0.55f)) addPart(group, x + dx, y + 0.55f, z, 0.32f, 0.3f, 1.5f, stone, 0f)
+        for (k in 0 until 8) {
+            val a = k * 0.78539816f
+            addPart(
+                group, x + cos(a) * 0.82f, y + 0.55f, z + sin(a) * 0.82f,
+                0.66f, 0.30f, 0.32f, stone,
+                90f - Math.toDegrees(a.toDouble()).toFloat(),
+            )
+        }
         addPart(group, x, y, z, 2.6f, 0.1f, 2.6f, path, 0f)
         // Path to the market.
         addPart(group, x, y, z + 4.0f, 2.2f, 0.06f, 4.4f, path, 0f)
@@ -701,7 +751,7 @@ class WorldRenderer(private val engine: Engine, private val game: GameState) {
             2 -> {
                 // Roofed Well: posts, crossbar, and a bucket on a rope.
                 buildStoneWell(group, x, z)
-                for (dx in floatArrayOf(-0.85f, 0.85f)) addPart(group, x + dx, y, z - 0.75f, 0.12f, 2.4f, 0.12f, wood, 0f)
+                for (dx in floatArrayOf(-0.85f, 0.85f)) addPart(group, x + dx, y, z - 0.75f, 0.13f, 2.4f, 0.13f, wood, 0f, assets.cyl6)
                 addPart(group, x, y + 2.4f, z - 0.75f, 1.9f, 0.14f, 0.16f, wood, 0f)
                 addRoof(group, x, y + 2.5f, z - 0.4f, 1.9f, 1.7f, roof, 0f)
                 addPart(group, x, y + 2.1f, z - 0.75f, 0.05f, 0.6f, 0.05f, wood, 0f)
@@ -711,37 +761,38 @@ class WorldRenderer(private val engine: Engine, private val game: GameState) {
                 // Pump Well: an iron pump on a plinth beside the ring.
                 buildStoneWell(group, x, z)
                 val metal = assets.material(Theme.ANVIL, Theme.ROUGHNESS_METAL, Theme.METALLIC_INGOT)
-                addPart(group, x + 1.35f, y + 0.85f, z, 0.42f, 0.9f, 0.42f, metal, 0f)
+                addPart(group, x + 1.35f, y + 0.85f, z, 0.44f, 0.9f, 0.44f, metal, 0f, assets.taper8)
                 addPart(group, x + 1.35f, y + 1.55f, z, 0.14f, 0.5f, 0.14f, metal, -25f)
                 addPart(group, x + 1.2f, y + 1.3f, z + 0.35f, 0.2f, 0.2f, 0.4f, metal, 0f)
             }
             else -> {
-                // The Millpond Fountain: a square stone basin whose wall is
-                // grounded on the plaza (v2.2.1 — it used to hover), a wide
-                // water surface, a pillar, and a live jet.
+                // The Millpond Fountain: an octagonal stone basin whose wall
+                // is grounded on the plaza, a wide water surface, a pillar,
+                // and a live jet.
                 val stone = assets.material(Theme.WELL_STONE, Theme.ROUGHNESS_PROP)
                 val water = assets.material(Theme.WELL_WATER, Theme.ROUGHNESS_PROP)
                 addPart(group, x, y, z, 6.2f, 0.07f, 6.2f, assets.material(Theme.PATH, Theme.ROUGHNESS_TERRAIN), 0f)
                 val r = 1.45f
-                for (k in -1..1) {
-                    val off = k * 0.85f
-                    addPart(group, x + off, y + 0.1f, z - r, 0.8f, 0.6f, 0.35f, stone, 0f)
-                    addPart(group, x + off, y + 0.1f, z + r, 0.8f, 0.6f, 0.35f, stone, 0f)
-                    addPart(group, x - r, y + 0.1f, z + off, 0.35f, 0.6f, 0.8f, stone, 0f)
-                    addPart(group, x + r, y + 0.1f, z + off, 0.35f, 0.6f, 0.8f, stone, 0f)
+                for (k in 0 until 8) {
+                    val a = k * 0.78539816f
+                    addPart(
+                        group, x + cos(a) * r, y + 0.1f, z + sin(a) * r,
+                        1.2f, 0.6f, 0.35f, stone,
+                        90f - Math.toDegrees(a.toDouble()).toFloat(),
+                    )
                 }
-                addPart(group, x, y + 0.42f, z, 2.4f, 0.06f, 2.4f, water, 0f)
-                addPart(group, x, y + 0.45f, z, 0.36f, 1.1f, 0.36f, stone, 0f)
-                addPart(group, x, y + 1.55f, z, 0.6f, 0.16f, 0.6f, stone, 0f)
+                addPart(group, x, y + 0.42f, z, 2.4f, 0.06f, 2.4f, water, 0f, assets.cyl8)
+                addPart(group, x, y + 0.45f, z, 0.38f, 1.1f, 0.38f, stone, 0f, assets.cyl6)
+                addPart(group, x, y + 1.5f, z, 0.6f, 0.22f, 0.6f, stone, 0f, assets.dome)
                 fountainJetEntity = assets.addRenderable(
-                    scene, assets.box, water,
+                    scene, assets.cyl8, water,
                     Transforms.trs(x, y + 1.7f, z, 0.1f, 1.0f, 0.1f),
                     castShadows = false,
                 )
                 group.add(fountainJetEntity)
                 for (i in 0 until 4) {
                     val a = i * 1.5708f + 0.7854f
-                    addPart(group, x + cos(a) * 0.85f, y + 0.8f, z + sin(a) * 0.85f, 0.16f, 0.34f, 0.16f, water, 0f)
+                    addPart(group, x + cos(a) * 0.85f, y + 0.8f, z + sin(a) * 0.85f, 0.16f, 0.34f, 0.16f, water, 0f, assets.gem)
                 }
             }
         }
@@ -838,7 +889,39 @@ class WorldRenderer(private val engine: Engine, private val game: GameState) {
         effects.update(deltaSeconds)
         val alpha = tickAlpha()
         val carryFill = if (game.carryCapacity > 0) game.inventory.total.toFloat() / game.carryCapacity else 0f
+        val torch = DayNight.torchLevel(game.timeOfDay)
+        playerRig.setTorchLevel(torch)
         playerRig.update(game.player, alpha, deltaSeconds, carryFill)
+        updateTorchLight(torch, alpha)
+    }
+
+    /**
+     * v2.3 — the smith's torch light: follows the player, flickers like the
+     * flame gem on the rig, and only exists in the scene between dusk and
+     * dawn. Miners carry torch VISUALS but no light of their own (the
+     * budget stays flat on low-end GPUs).
+     */
+    private fun updateTorchLight(torch: Float, alpha: Float) {
+        if (torch <= 0.01f) {
+            if (torchLightInScene) {
+                torchLightInScene = false
+                runCatching { scene.removeEntity(torchLightEntity) }
+            }
+            return
+        }
+        if (!torchLightInScene) {
+            torchLightInScene = true
+            runCatching { scene.addEntity(torchLightEntity) }
+        }
+        val px = lerp(game.player.prevX, game.player.x, alpha)
+        val pz = lerp(game.player.prevZ, game.player.z, alpha)
+        val py = WorldLayout.groundHeight(px, pz)
+        val lm = engine.lightManager
+        runCatching {
+            lm.setPosition(torchLightInstance, px, py + 1.45f, pz)
+        }
+        val flick = 0.88f + 0.12f * sin(clock * 11f) + 0.06f * sin(clock * 29f)
+        lm.setIntensity(torchLightInstance, 4_600f * torch * flick)
     }
 
     private fun tickAlpha(): Float = if (game.lastTickNanos == 0L) 0f
@@ -897,7 +980,9 @@ class WorldRenderer(private val engine: Engine, private val game: GameState) {
             minerRigs.add(HumanoidRig(engine, scene, assets, RigStyle.miner(miner.styleIndex)))
         }
         val alpha = tickAlpha()
+        val torch = DayNight.torchLevel(game.timeOfDay)
         for (i in minerRigs.indices) {
+            minerRigs[i].setTorchLevel(torch)
             minerRigs[i].update(game.miners[i].body, alpha, dt, 0f)
         }
     }
@@ -937,12 +1022,16 @@ class WorldRenderer(private val engine: Engine, private val game: GameState) {
             val tm = engine.transformManager
             for (i in 0 until 4) {
                 val theta = sailPhase + i * 1.5708f
+                // Cloth sail: the mesh already spans y 0.2..2.5 from the hub,
+                // so it needs only the rotation about the windshaft.
                 Transforms.rootInto(roofM, windmillHubX, windmillHubY - 0.1f, windmillHubZ, 0f, theta)
-                Transforms.translation(roofM2, 0f, 1.35f, 0f)
+                tm.setTransform(tm.getInstance(windmillSailEntities[i]), roofM)
+                // Wooden spar behind each sail.
+                Transforms.translation(roofM2, 0f, 0.1f, 0f)
                 Transforms.multiply(roofM3, roofM, roofM2)
-                Transforms.scale(roofM2, 0.1f, 2.3f, 0.42f)
+                Transforms.scale(roofM2, 0.06f, 2.7f, 0.06f)
                 Transforms.multiply(sailM, roofM3, roofM2)
-                tm.setTransform(tm.getInstance(windmillSailEntities[i]), sailM)
+                tm.setTransform(tm.getInstance(windmillSparEntities[i]), sailM)
             }
         }
         if (fountainJetEntity != 0 && wellVisible.last() == 1) {
@@ -1179,6 +1268,7 @@ class WorldRenderer(private val engine: Engine, private val game: GameState) {
         runCatching { engine.destroyEntity(sunEntity) }
         runCatching { engine.destroyEntity(furnaceLightEntity) }
         runCatching { engine.destroyEntity(monolithLightEntity) }
+        runCatching { engine.destroyEntity(torchLightEntity) }
         runCatching { indirectLight?.let { engine.destroyIndirectLight(it) } }
         runCatching { sky?.let { engine.destroySkybox(it) } }
         runCatching { cameraRig.destroy() }

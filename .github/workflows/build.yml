@@ -33,13 +33,13 @@ jobs:
       - name: Stage APK
         run: |
           mkdir -p dist
-          cp app/build/outputs/apk/release/app-release.apk dist/VillageForge-v2.2.1.apk
+          cp app/build/outputs/apk/release/app-release.apk dist/VillageForge-v2.3.apk
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: village-forge-apk
-          path: dist/VillageForge-v2.2.1.apk
+          path: dist/VillageForge-v2.3.apk
           retention-days: 30
           if-no-files-found: error
 
@@ -69,7 +69,7 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           disable-animations: true
           script: |
-            adb install -r dist/VillageForge-v2.2.1.apk
+            adb install -r dist/VillageForge-v2.3.apk
             adb logcat -c
             # phase=game fast-forwards past the title screen so the smoke test
             # exercises the live 3D world and HUD directly.
@@ -115,15 +115,16 @@ jobs:
           name: village-forge-apk
           path: dist
 
-      - name: Publish to GitHub Releases (tag v2.2.1)
+      - name: Publish to GitHub Releases (tag v2.3)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create v2.2.1 dist/VillageForge-v2.2.1.apk \
-            --title "Village Forge v2.2.1 — Village Rendering Hotfix" \
-            --notes "Fixes the three things reported against v2.2:
+          gh release create v2.3 dist/VillageForge-v2.3.apk \
+            --title "Village Forge v2.3 — The Reforged World Update" \
+            --notes "Nights you can actually see, torches to carry, and a world rebuilt out of curves instead of boxes:
 
-          - THE TOWN NO LONGER STARTS BUILT: every village slot stage was being drawn on day one regardless of your save - plots, cottages, lamps, the granary, windmill, chapel, everything, all overlapping. Buildings now appear ONLY as you buy their stages: dig the plot, raise the cottage, and so on. A fresh game starts as a lone camp: your workshop lean-to, the market stall, and the well
-          - NO MORE FLOATING MASONRY: all five well tiers used to stack on the same spot at once (ring + raised rim + roof + bucket + iron pump + fountain jet all hovering). The well now advances through clean eras - dug well, stone well, roofed well, pump well, Millpond Fountain - each replacing the last, and the fountain basin is properly grounded on the plaza
-          - DEBUG MODE: fresh games now start with 20,000 gold to speed up playtesting. Loading a save always restores your saved purse; the purse can be turned off in config (DebugConfig.ENABLED) for the normal economy" \
-            || gh release upload v2.2.1 dist/VillageForge-v2.2.1.apk --clobber
+          - BRIGHTER NIGHTS: night was still near-black on a phone screen at low brightness. The moonlit floor is raised across the board (brighter moonlight, more ambient fill, a lighter night sky) — night is now mood, not darkness
+          - CARRIED TORCHES: as dusk gathers, the blacksmith lights a torch (and the hired miners too). A warm, flickering point light travels with you through the evening, so low-brightness screens stay playable around the clock
+          - THE BOX LOOK IS GONE: the whole world was assembled from axis-aligned cubes. New curved primitive set — chamfered boxes, round columns, cones, domes, tapered towers, gems, faceted canopies, craggy cliffs, solid gable roofs, real windmill sails — reforging trees, cliffs, the furnace, the crystal hollow, the well ladder and every village building
+          - GROUND DETAIL: scattered grass tufts and pebble chips dress the valley floor; the furnace gets an arched glowing mouth; the windmill a round tapered tower with a dome cap and cloth sails" \
+            || gh release upload v2.3 dist/VillageForge-v2.3.apk --clobber

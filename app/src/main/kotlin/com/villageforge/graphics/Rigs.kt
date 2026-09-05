@@ -24,12 +24,14 @@ class RigStyle(
     val hasSack: Boolean,
     val hasPick: Boolean,
     val scale: Float,
+    val hasTorch: Boolean = false,
 ) {
     companion object {
         fun player() = RigStyle(
             Theme.PLAYER_SKIN, Theme.PLAYER_TUNIC, Theme.PLAYER_PANTS,
             Theme.PLAYER_HAIR, Theme.MINER_CAP, beard = true, apron = true,
             hasSack = true, hasPick = true, scale = 1f,
+            hasTorch = true,
         )
 
         fun miner(styleIndex: Int): RigStyle {
@@ -38,6 +40,7 @@ class RigStyle(
                 Theme.PLAYER_SKIN, tunic, Theme.PLAYER_PANTS,
                 null, Theme.MINER_CAP, beard = false, apron = false,
                 hasSack = false, hasPick = true, scale = 0.92f,
+                hasTorch = true,
             )
         }
 
@@ -89,9 +92,14 @@ class HumanoidRig(
     private val root = FloatArray(16)
     private val temp = FloatArray(16)
     private val temp2 = FloatArray(16)
+    private val torchJoint = FloatArray(16)
     private var clock = 0f
     private lateinit var pickHeadInstance: MaterialInstance
     private lateinit var sackInstance: MaterialInstance
+    private lateinit var torchFlameInstance: MaterialInstance
+    /** v2.3 — 0 unlit, 1 full flame; ramps with dusk. */
+    private var torchLevel = 0f
+    private val flamePhase = Math.random().toFloat() * 6.28f
 
     init {
         val skin = assets.material(style.skin, Theme.ROUGHNESS_PROP)
@@ -105,10 +113,14 @@ class HumanoidRig(
         val wood = assets.material(Theme.BARK, Theme.ROUGHNESS_PROP)
         pickHeadInstance = assets.material(Theme.PICK_TINTS[0], Theme.ROUGHNESS_ORE, Theme.METALLIC_ORE)
         sackInstance = assets.material(Theme.SACK, Theme.ROUGHNESS_PROP)
+        torchFlameInstance = assets.material(
+            Theme.TORCH_FLAME, Theme.ROUGHNESS_PROP, Theme.METALLIC_DEFAULT,
+            emissive = Theme.TORCH_FLAME, emissiveStrength = 0f,
+        )
         val identity = Transforms.trs(0f, 0f, 0f, 1f, 1f, 1f)
-        rigEntities[TORSO] = assets.addRenderable(scene, assets.box, tunic, identity)
+        rigEntities[TORSO] = assets.addRenderable(scene, assets.roundedBox, tunic, identity)
         rigEntities[APRON] = assets.addRenderable(scene, assets.box, apron, identity)
-        rigEntities[HEAD] = assets.addRenderable(scene, assets.box, skin, identity)
+        rigEntities[HEAD] = assets.addRenderable(scene, assets.roundedBox, skin, identity)
         rigEntities[HAIR] = assets.addRenderable(scene, assets.box, hair ?: cap, identity)
         rigEntities[BEARD] = assets.addRenderable(scene, assets.box, hair ?: cap, identity)
         rigEntities[LEFT_LEG] = assets.addRenderable(scene, assets.box, pants, identity)
@@ -121,6 +133,11 @@ class HumanoidRig(
         rigEntities[PICK_HANDLE] = assets.addRenderable(scene, assets.box, wood, identity)
         rigEntities[PICK_HEAD] = assets.addRenderable(scene, assets.box, pickHeadInstance, identity)
         rigEntities[SACK] = assets.addRenderable(scene, assets.box, sackInstance, identity)
+        if (style.hasTorch) {
+            val wrap = assets.material(Theme.TORCH_WRAP, Theme.ROUGHNESS_PROP)
+            rigEntities[TORCH_HANDLE] = assets.addRenderable(scene, assets.cyl6, wrap, identity)
+            rigEntities[TORCH_FLAME] = assets.addRenderable(scene, assets.gem, torchFlameInstance, identity)
+        }
     }
 
     /** A bought pick visibly changes on the model. */
@@ -129,10 +146,15 @@ class HumanoidRig(
         pickHeadInstance.setParameter("baseColor", tint.r, tint.g, tint.b)
     }
 
+    /** v2.3 — dusk ramps the carried torch up from unlit to a full flame. */
+    fun setTorchLevel(level: Float) { torchLevel = level }
+
     /** v2.2 — hides the whole rig (zero scale, far below ground) when its walker is indoors. */
     fun park() {
         val parked = Transforms.trs(0f, -100f, 0f, 0.001f, 0.001f, 0.001f)
-        for (i in 0 until LIMB_COUNT) tm.setTransform(tm.getInstance(rigEntities[i]), parked)
+        for (i in 0 until LIMB_COUNT) {
+            if (rigEntities[i] != 0) tm.setTransform(tm.getInstance(rigEntities[i]), parked)
+        }
     }
 
     fun update(walker: Player, alpha: Float, dt: Float, carryFill: Float) {
@@ -224,6 +246,12 @@ class HumanoidRig(
             composeStatic(SACK, 0f, -2f, 0f, 0.001f, 0.001f, 0.001f)
         }
 
+        // v2.3 — the torch rides the LEFT hand while the pick holds the right.
+        if (style.hasTorch && torchLevel > 0.02f) composeTorch(leftArm) else {
+            composeStatic(TORCH_HANDLE, 0f, -2f, 0f, 0.001f, 0.001f, 0.001f)
+            composeStatic(TORCH_FLAME, 0f, -2f, 0f, 0.001f, 0.001f, 0.001f)
+        }
+
         // Tiny head sway sells the walk cycle.
         if (headSway != 0f) {
             Transforms.translation(temp, headSway * 0.15f, 0f, 0f)
@@ -231,7 +259,9 @@ class HumanoidRig(
             System.arraycopy(temp2, 0, limbMatrices[HEAD], 0, 16)
         }
 
-        for (i in 0 until LIMB_COUNT) tm.setTransform(tm.getInstance(rigEntities[i]), limbMatrices[i])
+        for (i in 0 until LIMB_COUNT) {
+            if (rigEntities[i] != 0) tm.setTransform(tm.getInstance(rigEntities[i]), limbMatrices[i])
+        }
     }
 
     private fun swingPose(t: Float): Float = when {
@@ -269,6 +299,34 @@ class HumanoidRig(
         Transforms.multiply(limbMatrices[PICK_HEAD], temp2, temp)
     }
 
+    /**
+     * v2.3 — the carried torch. The handle is counter-rotated against the
+     * arm swing so it stays upright while walking, and the flame gem
+     * flickers on its own clock (phase offset per rig).
+     */
+    private fun composeTorch(leftArm: Float) {
+        // Joint at the left hand (arm tip, slightly forward), counter-rotated
+        // so the torch stays vertical while the arm swings.
+        Transforms.translation(temp, 0f, -0.50f, 0.05f)
+        Transforms.multiply(temp2, joints[LEFT_ARM], temp)
+        Transforms.rotationX(temp, -leftArm)
+        Transforms.multiply(torchJoint, temp2, temp)
+
+        // Handle: 6-sided post from the hand up.
+        Transforms.translation(temp, 0f, 0.0f, 0f)
+        Transforms.multiply(temp2, torchJoint, temp)
+        Transforms.scale(temp, 0.055f, 0.52f, 0.055f)
+        Transforms.multiply(limbMatrices[TORCH_HANDLE], temp2, temp)
+
+        // Flame: gem sits on the handle top and breathes.
+        val flick = 0.85f + 0.15f * sin(clock * 11f + flamePhase) + 0.07f * sin(clock * 27f + flamePhase * 2f)
+        Transforms.translation(temp, 0f, 0.50f + 0.06f * flick, 0f)
+        Transforms.multiply(temp2, torchJoint, temp)
+        Transforms.scale(temp, 0.085f * flick, 0.26f * flick, 0.085f * flick)
+        Transforms.multiply(limbMatrices[TORCH_FLAME], temp2, temp)
+        torchFlameInstance.setParameter("emissiveStrength", torchLevel * (3.4f + 2.6f * flick))
+    }
+
     private fun composeStatic(index: Int, ox: Float, oy: Float, oz: Float, sx: Float, sy: Float, sz: Float) {
         Transforms.translation(temp, ox, oy, oz)
         Transforms.multiply(temp2, root, temp)
@@ -294,7 +352,7 @@ class HumanoidRig(
     private fun easeIn(t: Float) = t * t
 
     private companion object {
-        const val LIMB_COUNT = 15
+        const val LIMB_COUNT = 17
         const val TORSO = 0; const val APRON = 1; const val HEAD = 2
         const val HAIR = 3; const val BEARD = 4
         const val LEFT_LEG = 5; const val RIGHT_LEG = 6
@@ -302,6 +360,7 @@ class HumanoidRig(
         const val LEFT_ARM = 9; const val RIGHT_ARM = 10
         const val BELT = 11; const val PICK_HANDLE = 12; const val PICK_HEAD = 13
         const val SACK = 14
+        const val TORCH_HANDLE = 15; const val TORCH_FLAME = 16
 
         const val HANDLE_LEN = 0.88f
         /** Fixed wrist grip: keeps the pick's arc in the swing plane. */

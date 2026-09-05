@@ -7,7 +7,7 @@ import kotlin.math.max
 import kotlin.math.pow
 
 object BuildInfo {
-    const val VERSION = "2.2.1"
+    const val VERSION = "2.3"
 }
 
 /**
@@ -108,6 +108,12 @@ object Theme {
     val PATH = Rgb(0.55f, 0.47f, 0.36f)
     val RAIN = Rgb(0.62f, 0.70f, 0.80f)
     val OVERCAST_SKY = Rgb(0.46f, 0.49f, 0.54f)
+
+    // v2.3 — carried torches for the smith and the hired hands.
+    val TORCH_FLAME = Rgb(1.0f, 0.66f, 0.25f)
+    val TORCH_WRAP = Rgb(0.45f, 0.18f, 0.10f)
+    val GRASS_TUFT = Rgb(0.20f, 0.38f, 0.11f)
+    val PEBBLE = Rgb(0.45f, 0.43f, 0.40f)
 
     const val ROUGHNESS_TERRAIN = 0.95f
     const val ROUGHNESS_PROP = 0.80f
@@ -250,21 +256,24 @@ object DayNight {
     const val DAY_END = 0.72f
     const val DUSK_END = 0.80f
 
+    // v2.3 — night floors raised again: v2.1's moonlit floor still read as
+    // near-black on a phone screen at low brightness. Deep night is now a
+    // clearly readable moonlit blue; "night" is mood, not darkness.
     const val DAY_SUN_LUX = 11_000f
-    const val NIGHT_SUN_LUX = 550f
+    const val NIGHT_SUN_LUX = 1_000f
     const val DAY_AMBIENT_LUX = 3_000f
-    const val NIGHT_AMBIENT_LUX = 1_400f
+    const val NIGHT_AMBIENT_LUX = 2_600f
 
     /** Daylight fraction at deep night (moonlight floor) and at sunrise/sunset. */
-    const val MOONLIGHT = 0.24f
+    const val MOONLIGHT = 0.35f
     const val GOLDEN = 0.55f
 
     val DAY_SKY = Theme.Rgb(0.52f, 0.68f, 0.84f)
     val DUSK_SKY = Theme.Rgb(0.84f, 0.48f, 0.34f)
-    val NIGHT_SKY = Theme.Rgb(0.09f, 0.12f, 0.21f)
+    val NIGHT_SKY = Theme.Rgb(0.14f, 0.18f, 0.30f)
     val DAY_SUN = Theme.Rgb(1.0f, 0.95f, 0.86f)
     val DUSK_SUN = Theme.Rgb(1.0f, 0.52f, 0.22f)
-    val NIGHT_SUN = Theme.Rgb(0.36f, 0.46f, 0.70f)
+    val NIGHT_SUN = Theme.Rgb(0.44f, 0.54f, 0.78f)
 
     /** 0 = full day, 1 = deep night. Used to drive lantern/fire glow. */
     fun nightness(t: Float): Float = when {
@@ -275,6 +284,16 @@ object DayNight {
     }
 
     fun isNightish(t: Float): Boolean = nightness(t) > 0.5f
+
+    /**
+     * v2.3 — how lit the carried torches are. They come on as dusk gathers
+     * (nightness ~0.3) and burn full by deep night, then dim through dawn.
+     */
+    fun torchLevel(t: Float): Float =
+        ((nightness(t) - TORCH_NIGHTNESS_START) / (TORCH_NIGHTNESS_FULL - TORCH_NIGHTNESS_START)).coerceIn(0f, 1f)
+
+    const val TORCH_NIGHTNESS_START = 0.30f
+    const val TORCH_NIGHTNESS_FULL = 0.62f
 }
 
 object WorldLayout {
