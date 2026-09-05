@@ -48,6 +48,11 @@ data class StatsView(
     val itemsCrafted: Int,
     val minersHired: Int,
     val playSeconds: Int,
+    val renownEarned: Int = 0,
+    val commissionsFilled: Int = 0,
+    val prestige: Int = 0,
+    val residents: Int = 0,
+    val rainMinutes: Int = 0,
 )
 
 // ---- Shop ----------------------------------------------------------------
@@ -129,7 +134,155 @@ private fun UpgradeRow(title: String, detail: String, buyLabel: String?, canBuy:
         }
         if (buyLabel != null) {
             Spacer(Modifier.width(10.dp))
-            ActionChip(buyLabel, canBuy) { onBuy() }
+            // v2.2 — hold the button and it keeps buying (M45).
+            HoldRepeatChip(buyLabel, canBuy) { onBuy() }
+        }
+    }
+}
+
+// ---- Orders (v2.2) ---------------------------------------------------------
+
+/**
+ * The market's order board: customers ask for a specific good and wait.
+ * Orders fill BY SELLING — there is no delivery chore, and ignoring one
+ * costs nothing but the bounty.
+ */
+@Composable
+fun BoxScope.OrdersSheet(orders: GameState.OrdersSnapshot, onClose: () -> Unit) {
+    SheetShell("Market Orders", onClose) {
+        if (!orders.boardOpen) {
+            BasicText(
+                "The board is quiet. Sell your wares and word of a reliable smith will spread — orders arrive at ${orders.renownNeeded} renown.",
+                style = TextStyle(color = Color(UiColors.TEXT), fontSize = 13.sp),
+            )
+        } else if (orders.orders.isEmpty()) {
+            BasicText(
+                "No one is waiting right now. Keep crafting — a customer walks in off the south road every so often.",
+                style = TextStyle(color = Color(UiColors.TEXT), fontSize = 13.sp),
+            )
+        } else {
+            BasicText(
+                "Anything that reaches the market counts — carried or banked. Ignore an order and it simply lapses.",
+                style = TextStyle(color = Color(UiColors.DIM), fontSize = 12.sp),
+            )
+            Spacer(Modifier.height(10.dp))
+        }
+        for (o in orders.orders) {
+            OrderCard(o)
+            Spacer(Modifier.height(10.dp))
+        }
+    }
+}
+
+@Composable
+private fun OrderCard(o: GameState.OrderSnapshot) {
+    val progress = (o.filled.toFloat() / o.needed.coerceAtLeast(1)).coerceIn(0f, 1f)
+    val timeLeft = o.secsLeft.coerceAtLeast(0f)
+    val urgent = timeLeft < 60f
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .background(Color(UiColors.PANEL_RAISED), RoundedCornerShape(10.dp))
+            .padding(horizontal = 12.dp, vertical = 10.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            BasicText(
+                "${o.needed} × ${o.item.label}",
+                style = TextStyle(color = Color(UiColors.HEADER), fontSize = 15.sp, fontWeight = FontWeight.Bold),
+            )
+            Spacer(Modifier.weight(1f))
+            BasicText(
+                "+${o.bounty} c",
+                style = TextStyle(color = Color(UiColors.COIN_TEXT), fontSize = 14.sp, fontWeight = FontWeight.Bold),
+            )
+        }
+        Spacer(Modifier.height(4.dp))
+        BasicText(
+            "sold ${o.filled}/${o.needed} · +${o.renown} renown · +${o.honour} prestige",
+            style = TextStyle(color = Color(UiColors.TEXT), fontSize = 12.sp),
+        )
+        Spacer(Modifier.height(6.dp))
+        ProgressBar(progress, UiColors.GOOD)
+        Spacer(Modifier.height(6.dp))
+        BasicText(
+            if (timeLeft >= 60f) "waits ${timeLeft.toInt() / 60}m ${timeLeft.toInt() % 60}s" else "leaves in ${timeLeft.toInt()}s",
+            style = TextStyle(color = Color(if (urgent) UiColors.WARN else UiColors.DIM), fontSize = 11.sp),
+        )
+    }
+}
+
+// ---- Town (v2.2) ---------------------------------------------------------------
+
+/** The build-the-village sheet: one press quotes the whole bill. */
+@Composable
+fun BoxScope.TownSheet(game: GameState, town: GameState.TownSnapshot, coins: Int, onClose: () -> Unit) {
+    SheetShell("The Village", onClose) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            BasicText("Renown ${town.renown}", style = TextStyle(color = Color(UiColors.COIN_TEXT), fontSize = 14.sp, fontWeight = FontWeight.Bold))
+            Spacer(Modifier.width(14.dp))
+            BasicText("Prestige ${town.prestige}", style = TextStyle(color = Color(UiColors.XP), fontSize = 14.sp, fontWeight = FontWeight.Bold))
+            Spacer(Modifier.weight(1f))
+            BasicText(town.wellLabel, style = TextStyle(color = Color(UiColors.DIM), fontSize = 12.sp))
+        }
+        BasicText(
+            if (town.residents > 0) "${town.residents} townsfolk live here now" else "Build homes and households will move in.",
+            style = TextStyle(color = Color(UiColors.DIM), fontSize = 12.sp),
+        )
+        Spacer(Modifier.height(10.dp))
+        for (s in town.slots) {
+            SlotCard(s, coins) { game.enqueue(GameState.Command.BuildSlot(s.index)) }
+            Spacer(Modifier.height(8.dp))
+        }
+        if (town.boons.isNotEmpty()) {
+            UpgradeDivider()
+            BasicText("Village boons", style = TextStyle(color = Color(UiColors.HEADER), fontSize = 14.sp, fontWeight = FontWeight.Bold))
+            Spacer(Modifier.height(6.dp))
+            for (b in town.boons) {
+                BasicText("✓ $b", style = TextStyle(color = Color(UiColors.GOOD), fontSize = 12.sp))
+                Spacer(Modifier.height(3.dp))
+            }
+        }
+    }
+}
+
+@Composable
+private fun SlotCard(s: GameState.SlotSnapshot, coins: Int, onBuild: () -> Unit) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .background(Color(UiColors.PANEL_RAISED), RoundedCornerShape(10.dp))
+            .padding(horizontal = 12.dp, vertical = 10.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                BasicText(s.title, style = TextStyle(color = Color(UiColors.HEADER), fontSize = 14.sp, fontWeight = FontWeight.Bold))
+                BasicText(s.desc, style = TextStyle(color = Color(UiColors.TEXT), fontSize = 11.sp))
+            }
+            when {
+                s.complete -> BasicText("✓", style = TextStyle(color = Color(UiColors.GOOD), fontSize = 16.sp, fontWeight = FontWeight.Bold))
+                !s.renownMet -> BasicText(
+                    "🔒 ${s.renownReq} renown",
+                    style = TextStyle(color = Color(UiColors.DIM), fontSize = 11.sp),
+                )
+                else -> HoldRepeatChip("${s.bill} c", s.affordable) { onBuild() }
+            }
+        }
+        if (!s.complete) {
+            if (s.suppliesLine.isNotEmpty()) {
+                Spacer(Modifier.height(4.dp))
+                BasicText(
+                    "bill covers ${s.suppliesLine}",
+                    style = TextStyle(color = Color(UiColors.DIM), fontSize = 11.sp),
+                )
+            }
+            if (s.maxStage > 1) {
+                Spacer(Modifier.height(6.dp))
+                ProgressBar(s.stage.toFloat() / s.maxStage, UiColors.XP)
+            }
+        }
+        s.boonLabel?.let {
+            Spacer(Modifier.height(4.dp))
+            BasicText(it, style = TextStyle(color = Color(if (s.complete) UiColors.GOOD else UiColors.DIM), fontSize = 11.sp))
         }
     }
 }
@@ -418,12 +571,21 @@ fun BoxScope.QuestSheet(
         }
         Spacer(Modifier.height(14.dp))
         SectionHeader("Chronicle")
+        // The Record: figures written out in full, not rounded — a counter you
+        // glance at wants to be short; a record you sit and read wants the
+        // actual number (M44 of the original build).
         StatRow("Ore mined", "${stats.oreMined}")
         StatRow("Coins earned", "${stats.coinsEarned} c")
         StatRow("Ingots smelted", "${stats.ingotsSmelted}")
         StatRow("Items crafted", "${stats.itemsCrafted}")
         StatRow("Miners hired", "${stats.minersHired}")
         StatRow("Time played", formatDuration(stats.playSeconds))
+        UpgradeDivider()
+        StatRow("Renown earned", "${stats.renownEarned}")
+        StatRow("Commissions filled", "${stats.commissionsFilled}")
+        StatRow("Village prestige", "${stats.prestige}")
+        StatRow("Townsfolk", "${stats.residents}")
+        StatRow("Rain on the village", "${stats.rainMinutes}m")
         Spacer(Modifier.height(8.dp))
     }
 }

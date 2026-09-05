@@ -22,13 +22,14 @@ class RigStyle(
     val beard: Boolean,
     val apron: Boolean,
     val hasSack: Boolean,
+    val hasPick: Boolean,
     val scale: Float,
 ) {
     companion object {
         fun player() = RigStyle(
             Theme.PLAYER_SKIN, Theme.PLAYER_TUNIC, Theme.PLAYER_PANTS,
             Theme.PLAYER_HAIR, Theme.MINER_CAP, beard = true, apron = true,
-            hasSack = true, scale = 1f,
+            hasSack = true, hasPick = true, scale = 1f,
         )
 
         fun miner(styleIndex: Int): RigStyle {
@@ -36,7 +37,34 @@ class RigStyle(
             return RigStyle(
                 Theme.PLAYER_SKIN, tunic, Theme.PLAYER_PANTS,
                 null, Theme.MINER_CAP, beard = false, apron = false,
-                hasSack = false, scale = 0.92f,
+                hasSack = false, hasPick = true, scale = 0.92f,
+            )
+        }
+
+        /** v2.2 — the townsfolk and market customers: plain folk, no tools. */
+        private val VILLAGER_TUNICS = listOf(
+            Theme.Rgb(0.42f, 0.34f, 0.24f), Theme.Rgb(0.36f, 0.40f, 0.26f),
+            Theme.Rgb(0.48f, 0.40f, 0.52f), Theme.Rgb(0.50f, 0.36f, 0.22f),
+            Theme.Rgb(0.30f, 0.36f, 0.44f), Theme.Rgb(0.55f, 0.48f, 0.30f),
+        )
+        private val VILLAGER_PANTS = listOf(
+            Theme.Rgb(0.28f, 0.24f, 0.20f), Theme.Rgb(0.22f, 0.26f, 0.30f),
+            Theme.Rgb(0.32f, 0.26f, 0.18f),
+        )
+        private val VILLAGER_HAIR = listOf(
+            Theme.Rgb(0.20f, 0.14f, 0.07f), Theme.Rgb(0.55f, 0.42f, 0.20f),
+            Theme.Rgb(0.16f, 0.16f, 0.18f), Theme.Rgb(0.75f, 0.72f, 0.66f),
+        )
+
+        fun villager(variant: Int): RigStyle {
+            val v = variant.coerceAtLeast(0)
+            return RigStyle(
+                Theme.PLAYER_SKIN,
+                VILLAGER_TUNICS[v % VILLAGER_TUNICS.size],
+                VILLAGER_PANTS[v % VILLAGER_PANTS.size],
+                VILLAGER_HAIR[v % VILLAGER_HAIR.size],
+                Theme.PLAYER_BELT, beard = v % 3 == 0, apron = false,
+                hasSack = false, hasPick = false, scale = 0.90f + 0.06f * (v % 3),
             )
         }
     }
@@ -99,6 +127,12 @@ class HumanoidRig(
     fun setPickTint(tier: Int) {
         val tint = Theme.PICK_TINTS[tier.coerceIn(0, Theme.PICK_TINTS.size - 1)]
         pickHeadInstance.setParameter("baseColor", tint.r, tint.g, tint.b)
+    }
+
+    /** v2.2 — hides the whole rig (zero scale, far below ground) when its walker is indoors. */
+    fun park() {
+        val parked = Transforms.trs(0f, -100f, 0f, 0.001f, 0.001f, 0.001f)
+        for (i in 0 until LIMB_COUNT) tm.setTransform(tm.getInstance(rigEntities[i]), parked)
     }
 
     fun update(walker: Player, alpha: Float, dt: Float, carryFill: Float) {
@@ -172,7 +206,10 @@ class HumanoidRig(
         composeLimb(RIGHT_ARM, root, 0.33f, 1.08f, 0f, rightArm, 0.13f, 0.52f, 0.13f)
         // The pick hangs from the hand (arm tip) at a fixed grip angle; the
         // handle is CENTERED on the hand so it pokes above and below it.
-        composePick(rightArm)
+        if (style.hasPick) composePick(rightArm) else {
+            composeStatic(PICK_HANDLE, 0f, -2f, 0f, 0.001f, 0.001f, 0.001f)
+            composeStatic(PICK_HEAD, 0f, -2f, 0f, 0.001f, 0.001f, 0.001f)
+        }
 
         // Ore sack on the back grows with how full the backpack is.
         if (style.hasSack) {

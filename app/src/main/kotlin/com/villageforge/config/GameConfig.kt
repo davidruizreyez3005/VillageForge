@@ -7,7 +7,7 @@ import kotlin.math.max
 import kotlin.math.pow
 
 object BuildInfo {
-    const val VERSION = "2.1.1"
+    const val VERSION = "2.2"
 }
 
 object Theme {
@@ -80,6 +80,23 @@ object Theme {
     val MINE_TIMBER = Rgb(0.26f, 0.18f, 0.11f)
     val MINE_DARK = Rgb(0.04f, 0.05f, 0.07f)
     val STANDING_STONE = Rgb(0.30f, 0.34f, 0.30f)
+
+    // v2.2 — The Village Update: the town quarter's palette.
+    val PLASTER = Rgb(0.86f, 0.80f, 0.70f)
+    val TIMBER = Rgb(0.30f, 0.21f, 0.12f)
+    val ROOF_TILE = Rgb(0.48f, 0.24f, 0.16f)
+    val ROOF_THATCH = Rgb(0.62f, 0.50f, 0.28f)
+    val DOOR_WOOD = Rgb(0.24f, 0.16f, 0.09f)
+    val WINDOW_GLOW = Rgb(1.0f, 0.75f, 0.42f)
+    val WELL_STONE = Rgb(0.55f, 0.53f, 0.50f)
+    val WELL_WATER = Rgb(0.24f, 0.44f, 0.55f)
+    val SOIL = Rgb(0.33f, 0.25f, 0.16f)
+    val WHEAT = Rgb(0.85f, 0.70f, 0.30f)
+    val SAIL_CLOTH = Rgb(0.90f, 0.87f, 0.80f)
+    val CHAPEL_STONE = Rgb(0.80f, 0.78f, 0.74f)
+    val PATH = Rgb(0.55f, 0.47f, 0.36f)
+    val RAIN = Rgb(0.62f, 0.70f, 0.80f)
+    val OVERCAST_SKY = Rgb(0.46f, 0.49f, 0.54f)
 
     const val ROUGHNESS_TERRAIN = 0.95f
     const val ROUGHNESS_PROP = 0.80f
@@ -291,6 +308,9 @@ object WorldLayout {
     const val ANVIL_X = 3.1f
     const val ANVIL_Z = 8.2f
     const val GATE_Z = -19.2f
+    /** The south road customers arrive on (v2.2 town layer). */
+    const val ROAD_SOUTH_X = 0f
+    const val ROAD_SOUTH_Z = 16.5f
 
     data class RockSpawn(val ore: Ore, val x: Float, val z: Float)
 
@@ -360,6 +380,11 @@ object WorldLayout {
             if (dist(x, z, BIN_X, BIN_Z) < 4f) continue
             if (dist(x, z, FURNACE_X, FURNACE_Z) < 4f) continue
             if (dist(x, z, ANVIL_X, ANVIL_Z) < 3f) continue
+            // v2.2 — keep the trees off the town quarter: build slots, the
+            // plaza well, and the south road the market customers walk in on.
+            if (dist(x, z, Town.WELL_X, Town.WELL_Z) < 3.2f) continue
+            if (dist(x, z, ROAD_SOUTH_X, ROAD_SOUTH_Z) < 3f) continue
+            if (Town.slots.any { dist(x, z, it.x, it.z) < 3.2f }) continue
             if (rocks.any { dist(x, z, it.x, it.z) < 5f }) continue
             if (placed.any { dist(x, z, it.first, it.second) < 3.5f }) continue
             placed.add(x to z)

@@ -33,13 +33,13 @@ jobs:
       - name: Stage APK
         run: |
           mkdir -p dist
-          cp app/build/outputs/apk/release/app-release.apk dist/VillageForge-v2.1.1.apk
+          cp app/build/outputs/apk/release/app-release.apk dist/VillageForge-v2.2.apk
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: village-forge-apk
-          path: dist/VillageForge-v2.1.1.apk
+          path: dist/VillageForge-v2.2.apk
           retention-days: 30
           if-no-files-found: error
 
@@ -69,7 +69,7 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           disable-animations: true
           script: |
-            adb install -r dist/VillageForge-v2.1.1.apk
+            adb install -r dist/VillageForge-v2.2.apk
             adb logcat -c
             # phase=game fast-forwards past the title screen so the smoke test
             # exercises the live 3D world and HUD directly.
@@ -115,20 +115,19 @@ jobs:
           name: village-forge-apk
           path: dist
 
-      - name: Publish to GitHub Releases (tag v2.1.1)
+      - name: Publish to GitHub Releases (tag v2.2)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create v2.1.1 dist/VillageForge-v2.1.1.apk \
-            --title "Village Forge v2.1.1 — Startup Crash Hotfix" \
-            --notes "Fixes the blocker that stopped many devices from getting into the game.
+          gh release create v2.2 dist/VillageForge-v2.2.apk \
+            --title "Village Forge v2.2 — The Village Update" \
+            --notes "The town-simulation heart of the original web build, blended into the Android game.
 
-          Fixed in v2.1.1:
-          - LOADING SCREEN BLOCKER: entering a village could crash the app during the save-slot relaunch, leaving you stuck on the loading screen forever. The terrain's shared GPU buffer was being destroyed twice at activity teardown; teardown is now deduplicated and exception-hardened so it can never kill the process
-          - CRASH ON EXIT: the same double-destroy crashed the app whenever the activity was destroyed (back press, slot switching). Both are fixed
-          - The old Filament engine is now fully released BEFORE the new village activity starts, so low-RAM devices never run two 3D engines at once during the loading transition
-
-          New in v2.1.1:
-          - App icon: a proper Village Forge launcher icon (pickaxe over forge embers), including adaptive icons for modern launchers
-          - True fullscreen: the status bar and navigation buttons are now hidden — swipe from an edge to peek them" \
-            || gh release upload v2.1.1 dist/VillageForge-v2.1.1.apk --clobber
+          New in v2.2 — the village grows up around your workshop:
+          - COMMISSIONS: customers walk in off the south road and ask for specific goods. Orders are filled BY SELLING at the market - carried or banked, no extra chore - and pay a bounty, renown, and prestige on top of the sale. Ignore one and it simply lapses
+          - RENOWN & PRESTIGE: every sale now builds your standing. Renown stocks the village's build slots; Prestige (buildings + filled commissions) grows the town well through five tiers, from a dug well to the Millpond Fountain with a live water jet
+          - THE VILLAGE: 14 build slots - street lamps, a cottage row, crop fields, a farmstead, granary, windmill, and a chapel with a visible bell. One press quotes the whole bill, supplies included. Completed buildings pay real boons: +10% sale prices, +25% carry, +15% offline pace, +20% renown
+          - TOWNSFOLK: every finished home moves a household in. They keep their own hours, wander the square and market by day, head home at dusk or in the rain, and their windows glow warm after dark
+          - WEATHER: rain rolls over the valley every few days - the light greys, streaks fall, and the streets empty. Nothing mechanical changes; it is a change of mood, not a tax
+          - The windmill's sails really turn; hold-to-buy on every shop upgrade; the quest Chronicle keeps the full-number Record" \
+            || gh release upload v2.2 dist/VillageForge-v2.2.apk --clobber

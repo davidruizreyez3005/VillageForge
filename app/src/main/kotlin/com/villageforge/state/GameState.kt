@@ -10,6 +10,7 @@ import com.villageforge.config.PlayerConfig
 import com.villageforge.config.Progression
 import com.villageforge.config.QuestMetric
 import com.villageforge.config.Quests
+import com.villageforge.config.Town
 import com.villageforge.config.Upgrades
 import com.villageforge.config.WorldLayout
 import com.villageforge.entities.Miner
@@ -55,6 +56,27 @@ class GameState {
     var musicEnabled = true
     var lastTickNanos = 0L
 
+    // ---- v2.2 town layer ----
+
+    /** The town's trust in the smith: earned on every sale and commission. */
+    var renown = 0
+    /** Prestige earned by filling commissions — the only prestige that is not a building. */
+    var honour = 0
+    /** Build stage per village slot (see [Town.slots]). */
+    val villageSlots = IntArray(Town.slots.size)
+    /** Live market orders, oldest first. */
+    val commissions = ArrayList<Commission>()
+    /** Customers walking home after their order ended — visual only, not saved. */
+    val departingCustomers = ArrayList<Commission>()
+    /** Current rain strength 0..1 (drives light + particles + townsfolk). */
+    var weatherRain = 0f
+    /** Countdown to the next change in the weather schedule. */
+    var weatherClock = Town.Weather.FIRST_DRY_SECONDS
+    /** Weather phase: true while a shower is running. */
+    var weatherWet = false
+    /** Townsfolk living in built homes; bodies only live for the session. */
+    val residents = ArrayList<Resident>()
+
     val stats = Stats()
 
     /** Medal ids unlocked so far (v2.1). */
@@ -63,7 +85,10 @@ class GameState {
     /** Filled by SaveManager on load when offline progress applies; consumed by the HUD. */
     var offlineReport: OfflineReport? = null
 
-    val carryCapacity: Int get() = Upgrades.BACKPACK_CAPACITIES[backpackLevel]
+    val carryCapacity: Int get() {
+        val base = Upgrades.BACKPACK_CAPACITIES[backpackLevel]
+        return (base * Town.carryMul(villageSlots)).toInt().coerceAtLeast(base)
+    }
 
     data class SmeltBatch(val metal: Metal, var remain: Float) {
         val total: Float get() = metal.smeltSeconds
@@ -79,8 +104,47 @@ class GameState {
         var rocksBroken = 0
         var offlineGains = 0
         var nightSeconds = 0f
+        // v2.2 — the town counters (the Record).
+        var commissionsFilled = 0
+        var commissionsExpired = 0
+        var renownEarned = 0
+        var buildStages = 0
+        var rainSeconds = 0f
         fun ingotsSmeltedTotal(): Int = ingotsSmelted.sum()
         fun itemsCraftedTotal(): Int = itemsCrafted.sum()
+    }
+
+    /** Derived town standing, shown wherever prestige matters. */
+    fun prestige(): Int = Town.prestige(villageSlots, honour)
+
+    /** A customer's standing order; the sale itself fills it. */
+    class Commission(
+        val id: Int,
+        val item: Item,
+        val needed: Int,
+        var filled: Int,
+        var remain: Float,
+        val bounty: Int,
+        val renown: Int,
+        val honour: Int,
+    ) {
+        /** The customer walking to / waiting at / leaving the market. */
+        val customer = com.villageforge.entities.Player()
+        /** Standing at the stall (drives the rig). */
+        var customerAtMarket = false
+        var customerLeaving = false
+    }
+
+    /** One soul living in a built home: keeps hours, wanders, goes in at dusk. */
+    class Resident(val homeX: Float, val homeZ: Float) {
+        val body = com.villageforge.entities.Player()
+        /** False while indoors (rig hidden). */
+        var out = false
+        /** Seconds until the next wander target. */
+        var wanderTimer = 0f
+        /** Own clock: when this household rises and turns in. */
+        var riseTime = 0.10f
+        var sleepTime = 0.78f
     }
 
     data class OfflineReport(
@@ -104,6 +168,7 @@ class GameState {
         data class Craft(val item: Item) : Command()
         object ToggleSound : Command()
         object ToggleMusic : Command()
+        data class BuildSlot(val slotIndex: Int) : Command()
     }
 
     private val commands = ArrayDeque<Command>()
@@ -130,6 +195,27 @@ class GameState {
     )
     data class LevelSnapshot(val level: Int, val xp: Int, val xpNeeded: Int)
     data class MinerSnapshot(val count: Int, val max: Int, val nextCost: Int)
+    data class OrderSnapshot(
+        val id: Int, val item: Item, val needed: Int, val filled: Int,
+        val secsLeft: Float, val totalSecs: Float, val bounty: Int,
+        val renown: Int, val honour: Int,
+    )
+    data class OrdersSnapshot(
+        val boardOpen: Boolean, val renownNeeded: Int,
+        val orders: List<OrderSnapshot>,
+    )
+    data class SlotSnapshot(
+        val index: Int, val id: String, val title: String, val desc: String,
+        val stage: Int, val maxStage: Int, val stageLabel: String?,
+        val bill: Int, val suppliesLine: String,
+        val renownReq: Int, val renownMet: Boolean, val affordable: Boolean,
+        val complete: Boolean, val boonLabel: String?,
+    )
+    data class TownSnapshot(
+        val renown: Int, val prestige: Int, val wellTier: Int, val wellLabel: String,
+        val residents: Int, val slots: List<SlotSnapshot>,
+        val boons: List<String>,
+    )
 
     val carryFlow = MutableStateFlow(CarrySnapshot(List(Ore.entries.size) { 0 }, 0, PlayerConfig.CARRY_CAPACITY))
     val stockpileFlow = MutableStateFlow(StockpileSnapshot(List(Ore.entries.size) { 0 }, 0))
@@ -147,6 +233,10 @@ class GameState {
     val musicFlow = MutableStateFlow(true)
     /** Unlocked medal count — bumps whenever a new achievement lands. */
     val achievementFlow = MutableStateFlow(0)
+    /** Live market orders (v2.2). */
+    val ordersFlow = MutableStateFlow(OrdersSnapshot(false, Town.RENOWN_FOR_BOARD, emptyList()))
+    /** The build-the-village sheet snapshot (v2.2). */
+    val townFlow = MutableStateFlow(townSnapshot())
 
     private fun questSnapshot(): QuestSnapshot {
         val idx = questIndex
@@ -169,6 +259,42 @@ class GameState {
         QuestMetric.LEVEL -> level
         QuestMetric.CRYSTAL_PICK -> if (pickTier >= Picks.CRYSTAL.ordinal) 1 else 0
         QuestMetric.CRYSTAL_MINED -> stats.oresMined[Ore.CRYSTAL.ordinal]
+        QuestMetric.COMMISSIONS_FILLED -> stats.commissionsFilled
+        QuestMetric.PRESTIGE -> prestige()
+    }
+
+    private fun townSnapshot(): TownSnapshot {
+        val prestige = prestige()
+        val tier = Town.wellTierIndex(prestige)
+        val slotViews = Town.slots.mapIndexed { i, slot ->
+            val stage = villageSlots[i]
+            val complete = stage >= slot.maxStage
+            val nextStage = if (complete) null else slot.stages[stage]
+            val renownMet = renown >= slot.renownReq
+            SlotSnapshot(
+                index = i, id = slot.id,
+                title = "${slot.kind.label} — " + if (complete) "built" else nextStage!!.label,
+                desc = when (slot.kind) {
+                    Town.SlotKind.HOUSE -> "A household moves in when the walls are up."
+                    Town.SlotKind.LAMP -> "Lights the square after dark."
+                    Town.SlotKind.FARM -> "The farmstead's fields feed the village."
+                    Town.SlotKind.FIELD -> "Golden rows through the season."
+                    Town.SlotKind.GRANARY -> "Deeper stores for every haul home."
+                    Town.SlotKind.WINDMILL -> "Its sails keep working while you sleep."
+                    Town.SlotKind.CHAPEL -> "The valley's pride, and its gratitude."
+                },
+                stage = stage, maxStage = slot.maxStage,
+                stageLabel = if (complete) null else nextStage!!.label,
+                bill = if (complete) 0 else slot.bill(stage),
+                suppliesLine = if (complete) "" else nextStage!!.supplies.joinToString(" · ") { (m, n) -> "$n ${m.label}" },
+                renownReq = slot.renownReq, renownMet = renownMet,
+                affordable = !complete && renownMet && coins >= slot.bill(stage),
+                complete = complete,
+                boonLabel = slot.boon?.let { if (Town.isComplete(villageSlots, it)) "✓ ${it.label}" else it.label },
+            )
+        }
+        val boons = Town.Boon.entries.filter { Town.isComplete(villageSlots, it) }.map { it.label }
+        return TownSnapshot(renown, prestige, tier, Town.wellTiers[tier].label, residents.size, slotViews, boons)
     }
 
     fun publishUi() {
@@ -206,6 +332,18 @@ class GameState {
 
         val quantizedTime = (timeOfDay * 128f).toInt() / 128f
         if (quantizedTime != timeFlow.value) timeFlow.value = quantizedTime
+
+        // v2.2 — the town flows.
+        val orders = OrdersSnapshot(
+            boardOpen = renown >= Town.RENOWN_FOR_BOARD,
+            renownNeeded = Town.RENOWN_FOR_BOARD,
+            orders = commissions.map {
+                OrderSnapshot(it.id, it.item, it.needed, it.filled, it.remain, Town.commissions.first { d -> d.item == it.item }.secs, it.bounty, it.renown, it.honour)
+            },
+        )
+        if (orders != ordersFlow.value) ordersFlow.value = orders
+        val town = townSnapshot()
+        if (town != townFlow.value) townFlow.value = town
     }
 
     /** Adds XP; returns how many levels were gained (bonus coins already applied). */

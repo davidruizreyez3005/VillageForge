@@ -1,0 +1,349 @@
+package com.villageforge.systems
+
+import com.villageforge.config.Item
+import com.villageforge.config.PlayerConfig
+import com.villageforge.config.Town
+import com.villageforge.config.WorldLayout
+import com.villageforge.core.EventBus
+import com.villageforge.core.SfxId
+import com.villageforge.entities.AnimState
+import com.villageforge.state.GameState
+import kotlin.math.hypot
+import kotlin.random.Random
+
+/**
+ * v2.2 — the town layer, blended from the original web build.
+ *
+ * CommissionSystem places orders at the market (filled BY SELLING),
+ * VillageSystem owns the build slots and prestige, WeatherSystem runs the
+ * rain schedule, and TownsfolkSystem keeps the residents' hours.
+ */
+class CommissionSystem(private val bus: EventBus) {
+
+    private val rng = Random(2028)
+    private var spawnClock = 8f
+    private var nextId = 1
+
+    fun update(gs: GameState, dt: Float) {
+        val boardOpen = gs.renown >= Town.RENOWN_FOR_BOARD
+        val cap = Town.boardCapacity(gs.renown)
+
+        // Expire quietly: an order you ignore costs you nothing but the bounty.
+        val expired = gs.commissions.filter { it.remain <= 0f }
+        if (expired.isNotEmpty()) {
+            for (c in expired) {
+                gs.commissions.remove(c)
+                gs.stats.commissionsExpired++
+                dismissCustomer(gs, c)
+            }
+            bus.notices.tryEmit(
+                EventBus.Notice("A customer gave up waiting", EventBus.COLOR_WARN, WorldLayout.TRADE_POST_X, WorldLayout.TRADE_POST_Z, -30f)
+            )
+        }
+
+        // A sale may have filled an order; pay out and clear it here.
+        for (c in gs.commissions.toList()) {
+            c.remain -= dt
+            if (c.filled >= c.needed) complete(gs, c)
+        }
+
+        // Walk-in customers place new orders while the board has room.
+        if (boardOpen && gs.commissions.size < cap) {
+            spawnClock -= dt
+            if (spawnClock <= 0f) {
+                spawnClock = 18f + rng.nextFloat() * 26f
+                tryPlace(gs)
+            }
+        }
+
+        // Departed customers finish their walk to the road edge, then vanish.
+        val arrived = ArrayList<GameState.Commission>()
+        for (c in gs.departingCustomers) {
+            if (!c.customer.isMoving) arrived.add(c)
+            else c.customer.update(dt)
+        }
+        gs.departingCustomers.removeAll(arrived)
+    }
+
+    private fun tryPlace(gs: GameState) {
+        val craftable = Town.commissions.filter { Town.craftableAt(it.item, gs.pickTier) }
+        if (craftable.isEmpty()) return
+        val def = craftable[rng.nextInt(craftable.size)]
+        val needed = def.min + rng.nextInt(def.max - def.min + 1)
+        val bounty = (needed * def.item.sell * def.coinMul).toInt().coerceAtLeast(5)
+        val c = GameState.Commission(
+            id = nextId++, item = def.item, needed = needed, filled = 0,
+            remain = def.secs, bounty = bounty, renown = def.renown, honour = def.honour,
+        )
+        gs.commissions.add(c)
+        spawnCustomer(c)
+        bus.orderPlaced.tryEmit(EventBus.OrderPlaced(def.item.label, needed))
+        bus.sfx.tryEmit(EventBus.Sfx(SfxId.ORDER, 0.95f))
+        bus.notices.tryEmit(
+            EventBus.Notice(
+                "Order: $needed × ${def.item.label}",
+                EventBus.COLOR_INFO, WorldLayout.TRADE_POST_X, WorldLayout.TRADE_POST_Z, -30f,
+            )
+        )
+    }
+
+    /** Anything that reaches the market counts against live orders for that good. */
+    private fun complete(gs: GameState, c: GameState.Commission) {
+        gs.commissions.remove(c)
+        gs.coins += c.bounty
+        gs.stats.coinsEarnedTotal += c.bounty
+        gs.stats.commissionsFilled++
+        gs.renown += c.renown
+        gs.stats.renownEarned += c.renown
+        gs.honour += c.honour
+        dismissCustomer(gs, c)
+        levelsEvent(bus, gs, gs.addXp(c.bounty / 4))
+        bus.commissionFilled.tryEmit(EventBus.CommissionFilled(c.item.label, c.bounty, c.renown))
+        bus.sfx.tryEmit(EventBus.Sfx(SfxId.QUEST))
+        bus.notices.tryEmit(
+            EventBus.Notice(
+                "Order filled: +${c.bounty} c",
+                EventBus.COLOR_GOLD, WorldLayout.TRADE_POST_X, WorldLayout.TRADE_POST_Z, -30f,
+            )
+        )
+    }
+
+    private fun spawnCustomer(c: GameState.Commission) {
+        val body = c.customer
+        body.moveSpeedBonus = Town.WALK_SPEED - PlayerConfig.MOVE_SPEED
+        body.x = Town.ROAD_EDGE_X
+        body.z = Town.ROAD_EDGE_Z
+        body.prevX = body.x
+        body.prevZ = body.z
+        body.animState = AnimState.WALK
+        val idx = (c.id % 3)
+        body.setTarget(-1.9f + idx * 1.7f, 12.4f + (idx % 2) * 0.8f)
+        c.customerAtMarket = false
+    }
+
+    /** The commission is over (filled or lapsed); its customer walks home. */
+    private fun dismissCustomer(gs: GameState, c: GameState.Commission) {
+        c.customerAtMarket = false
+        c.customerLeaving = true
+        c.customer.setTarget(Town.ROAD_EDGE_X, Town.ROAD_EDGE_Z)
+        gs.departingCustomers.add(c)
+    }
+
+    /** Puts loaded commissions' customers back on the road (after a save load). */
+    fun restoreWalkers(gs: GameState) {
+        gs.departingCustomers.clear()
+        for (c in gs.commissions) spawnCustomer(c)
+    }
+
+    companion object {
+        /**
+         * Called by Economy on every sale: units of [item] that reached the
+         * market count against every live order for that good.
+         */
+        fun onSold(bus: EventBus, gs: GameState, item: Item, count: Int) {
+            var changed = false
+            for (c in gs.commissions.toList()) {
+                if (c.item != item || c.filled >= c.needed) continue
+                c.filled = (c.filled + count).coerceAtMost(c.needed)
+                changed = true
+                if (c.filled >= c.needed) {
+                    // completed next update() tick (payout centralized there)
+                }
+            }
+            if (changed) bus.sfx.tryEmit(EventBus.Sfx(SfxId.ORDER, 1.15f))
+        }
+    }
+}
+
+private fun levelsEvent(bus: EventBus, gs: GameState, levels: Int) {
+    if (levels > 0) bus.levelUp.tryEmit(EventBus.LevelUp(gs.level))
+}
+
+/** Owns the build slots: one press quotes the whole bill, supplies included. */
+class VillageSystem(private val bus: EventBus) {
+
+    fun tryBuild(gs: GameState, slotIndex: Int) {
+        val slot = Town.slots.getOrNull(slotIndex) ?: return
+        val stage = gs.villageSlots[slotIndex]
+        if (stage >= slot.maxStage) return
+        if (gs.renown < slot.renownReq) {
+            bus.notices.tryEmit(EventBus.Notice("Needs ${slot.renownReq} renown", EventBus.COLOR_WARN, slot.x, slot.z))
+            return
+        }
+        val bill = slot.bill(stage)
+        if (gs.coins < bill) {
+            bus.notices.tryEmit(EventBus.Notice("Need $bill c", EventBus.COLOR_WARN, slot.x, slot.z))
+            return
+        }
+        gs.coins -= bill
+        gs.villageSlots[slotIndex] = stage + 1
+        gs.stats.buildStages++
+        val complete = gs.villageSlots[slotIndex] >= slot.maxStage
+        bus.sfx.tryEmit(EventBus.Sfx(SfxId.BUY))
+        bus.notices.tryEmit(
+            EventBus.Notice(
+                if (complete) "${slot.kind.label} raised!" else slot.stages[stage].label,
+                EventBus.COLOR_GOLD, slot.x, slot.z, -30f,
+            )
+        )
+        bus.villageBuilt.tryEmit(EventBus.VillageBuilt(slot.stages[gs.villageSlots[slotIndex] - 1].label, complete))
+        levelsEvent(bus, gs, gs.addXp(40 + 20 * (stage + 1)))
+        if (complete && slot.boon != null) {
+            bus.sfx.tryEmit(EventBus.Sfx(SfxId.ACHIEVE))
+        }
+    }
+}
+
+/**
+ * The weather schedule: rare, short showers that grey the light and send the
+ * townsfolk home. No rate, cap, or price ever moves — a mood, not a tax.
+ */
+class WeatherSystem(private val bus: EventBus) {
+
+    private val rng = Random(4242)
+    private var announced = false
+    private var wetDuration = 0f
+
+    fun update(gs: GameState, dt: Float) {
+        gs.weatherClock -= dt
+        if (!gs.weatherWet) {
+            if (gs.weatherClock <= 0f) {
+                gs.weatherWet = true
+                wetDuration = Town.Weather.WET_MIN + rng.nextFloat() * (Town.Weather.WET_MAX - Town.Weather.WET_MIN)
+                gs.weatherClock = wetDuration + Town.Weather.FADE_OUT
+                announced = false
+            }
+        } else {
+            val elapsedInWet = wetDuration + Town.Weather.FADE_OUT - gs.weatherClock
+            gs.weatherRain = when {
+                elapsedInWet < Town.Weather.FADE_IN -> elapsedInWet / Town.Weather.FADE_IN
+                gs.weatherClock > Town.Weather.FADE_OUT -> 1f
+                else -> (gs.weatherClock / Town.Weather.FADE_OUT).coerceIn(0f, 1f)
+            }
+            if (!announced && gs.weatherRain > 0.25f) {
+                announced = true
+                bus.notices.tryEmit(EventBus.Notice("Rain rolls over the valley", EventBus.COLOR_INFO, gs.player.x, gs.player.z, -34f))
+            }
+            if (gs.weatherRain > 0.5f) gs.stats.rainSeconds += dt
+            if (gs.weatherClock <= 0f) {
+                gs.weatherWet = false
+                gs.weatherRain = 0f
+                gs.weatherClock = Town.Weather.DRY_MIN + rng.nextFloat() * (Town.Weather.DRY_MAX - Town.Weather.DRY_MIN)
+            }
+        }
+    }
+}
+
+/**
+ * Townsfolk: every completed home moves a household in. Out on the streets
+ * through the day on their own clocks, home at dusk or in the rain, windows
+ * lit once they are in.
+ */
+class TownsfolkSystem(private val bus: EventBus) {
+
+    private val rng = Random(5150)
+    private var residentSignature = -1
+
+    fun update(gs: GameState, dt: Float) {
+        syncResidents(gs)
+        val raining = gs.weatherRain > 0.35f
+        val t = gs.timeOfDay
+        var outCount = 0
+        for (r in gs.residents) outCount += if (r.out) 1 else 0
+
+        for (r in gs.residents) {
+            val body = r.body
+            val daylit = t > r.riseTime && t < r.sleepTime
+            when {
+                !r.out -> {
+                    if (daylit && !raining && outCount < Town.RESIDENT_RIGS) {
+                        r.out = true
+                        outCount++
+                        body.x = r.homeX
+                        body.z = r.homeZ
+                        body.prevX = body.x
+                        body.prevZ = body.z
+                        wanderTo(body)
+                    }
+                }
+                !daylit || raining -> {
+                    // Head home; the rig hides once they arrive.
+                    if (!body.isMoving) {
+                        if (hypot(body.x - r.homeX, body.z - r.homeZ) < 0.8f) {
+                            r.out = false
+                            outCount--
+                        } else {
+                            body.setTarget(r.homeX, r.homeZ)
+                        }
+                    }
+                }
+                else -> {
+                    if (!body.isMoving) {
+                        r.wanderTimer -= dt
+                        if (r.wanderTimer <= 0f) {
+                            r.wanderTimer = Town.WANDER_MIN + rng.nextFloat() * (Town.WANDER_MAX - Town.WANDER_MIN)
+                            wanderTo(body)
+                        }
+                    }
+                }
+            }
+            body.update(dt)
+        }
+
+        // Commission customers walk their own legs.
+        for (c in gs.commissions) stepCustomer(c, dt)
+    }
+
+    private fun stepCustomer(c: GameState.Commission, dt: Float) {
+        val body = c.customer
+        if (c.customerLeaving) return // CommissionSystem walks the departing out
+        if (!body.isMoving && !c.customerAtMarket) {
+            c.customerAtMarket = true
+        }
+        if (c.customerAtMarket && !body.isMoving) {
+            body.animState = AnimState.IDLE
+            body.faceTargetX = WorldLayout.TRADE_POST_X
+            body.faceTargetZ = WorldLayout.TRADE_POST_Z
+        }
+        body.update(dt)
+    }
+
+    private fun wanderTo(body: com.villageforge.entities.Player) {
+        val x = rng.nextFloat() * (Town.WANDER_X.endInclusive - Town.WANDER_X.start) + Town.WANDER_X.start
+        val z = rng.nextFloat() * (Town.WANDER_Z.endInclusive - Town.WANDER_Z.start) + Town.WANDER_Z.start
+        body.setTarget(x, z)
+    }
+
+    /** Grows or trims the resident list to match the built homes. */
+    private fun syncResidents(gs: GameState) {
+        val want = Town.residentsFor(gs.villageSlots)
+        if (want == residentSignature) return
+        residentSignature = want
+        while (gs.residents.size > want) gs.residents.removeAt(gs.residents.size - 1)
+        while (gs.residents.size < want) {
+            val homes = ArrayList<Pair<Float, Float>>()
+            val farmIdx = Town.slotIndex("farm")
+            val chapelIdx = Town.slotIndex("chapel")
+            for (i in Town.slots.indices) {
+                val slot = Town.slots[i]
+                if (slot.kind == Town.SlotKind.HOUSE && gs.villageSlots[i] >= slot.maxStage) {
+                    homes.add(slot.x to slot.z - 1.7f)
+                    homes.add(slot.x + 0.9f to slot.z - 1.7f)
+                }
+            }
+            if (gs.villageSlots[farmIdx] >= Town.slots[farmIdx].maxStage) {
+                homes.add(Town.slots[farmIdx].x to Town.slots[farmIdx].z - 1.7f)
+            }
+            if (gs.villageSlots[chapelIdx] >= Town.slots[chapelIdx].maxStage) {
+                homes.add(Town.slots[chapelIdx].x + 2.2f to Town.slots[chapelIdx].z)
+            }
+            val idx = gs.residents.size
+            val home = homes.getOrNull(idx % homes.size.coerceAtLeast(1)) ?: (0f to 8f)
+            val r = GameState.Resident(home.first, home.second)
+            r.riseTime = 0.08f + rng.nextFloat() * 0.16f
+            r.sleepTime = 0.70f + rng.nextFloat() * 0.14f
+            r.body.moveSpeedBonus = Town.WALK_SPEED - PlayerConfig.MOVE_SPEED
+            gs.residents.add(r)
+        }
+    }
+}

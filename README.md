@@ -1,6 +1,6 @@
 # Village Forge
 
-A 3D idle-mining village game for Android, rendered with Google [Filament](https://github.com/google/filament). Tap to walk, mine ore, smelt it in your furnace, forge goods at the anvil, sell at the trading post, and grow your workshop into a crystal-powered legend.
+A 3D idle-mining village game for Android, rendered with Google [Filament](https://github.com/google/filament). Tap to walk, mine ore, smelt it in your furnace, forge goods at the anvil, sell at the trading post — and grow a whole town up around your workshop: fill market commissions, earn renown and prestige, raise cottages, a farmstead, a windmill and a chapel, and watch townsfolk move in.
 
 ## Features
 
@@ -21,8 +21,15 @@ A 3D idle-mining village game for Android, rendered with Google [Filament](https
 - Visual juice: rock debris on every strike, anvil sparks while crafting, chimney smoke while smelting, tap ripples
 - Title screen with rising embers, village slot picker, and a loading flow
 - Procedural sound effects (mining, hammering, pouring, coins, fanfares, medal chimes) via a raw AudioTrack synth
-- Auto-saving to local JSON storage with atomic writes and v1 → v2 → v3 migration with offline progress
+- Auto-saving to local JSON storage with atomic writes and v1 → v2 → v3 → v4 migration with offline progress
 - True fullscreen gameplay (status bar and navigation hidden) with a proper launcher icon (v2.1.1)
+- **The Village Update (v2.2)**:
+  - **Commissions** — customers walk in off the south road and order specific goods; orders are filled *by selling* (no extra chore), pay a bounty + renown + prestige, and lapse quietly if ignored
+  - **Renown & Prestige** — every sale builds your standing; renown unlocks build slots, prestige grows the town well through five tiers (dug well → stone → roofed → pump → Millpond Fountain with a live jet)
+  - **Build the village** — 14 slots: street lamps, a cottage row, crop fields, a farmstead, granary, windmill (turning sails), and a chapel with a visible bell. One press quotes the whole bill, supplies included. Completed buildings grant boons: +10% sale prices, +25% carry capacity, +15% offline pace, +20% renown
+  - **Townsfolk** — every finished home moves a household in; residents keep their own hours, wander the square by day, head home at dusk, and their windows glow after dark
+  - **Weather** — rain rolls over the valley every few days: the light goes grey, streaks fall, the streets empty. Nothing mechanical changes — a mood, not a tax
+  - **Hold-to-buy** on every shop upgrade, and the quest Chronicle keeps full-number stats
 
 ## Tech stack
 
@@ -38,7 +45,7 @@ The APK is built automatically by GitHub Actions on every push to `main`.
 1. Open the repository → **Actions** → **Build APK**
 2. Wait for the run to finish (a few minutes)
 3. Download the **village-forge-apk** artifact from the run page
-4. Unzip it and sideload `VillageForge-v2.1.1.apk` onto any Android 7.0+ device
+4. Unzip it and sideload `VillageForge-v2.2.apk` onto any Android 7.0+ device
 
 To build locally:
 
@@ -53,6 +60,7 @@ gradle assembleDebug   # requires JDK 17 and the Android SDK (API 34)
 app/src/main/kotlin/com/villageforge/
 ├── MainActivity.kt          # composition root: title flow, sim loop, wiring
 ├── config/GameConfig.kt     # tuning tables: theme, ores, metals, items, picks, world
+├── config/Town.kt           # v2.2 town layer: commissions, build slots, boons, weather
 ├── config/Quests.kt         # quest chain definitions
 ├── entities/Entities.kt     # player, rocks, hired miner walkers
 ├── state/GameState.kt       # authoritative game state + UI snapshots

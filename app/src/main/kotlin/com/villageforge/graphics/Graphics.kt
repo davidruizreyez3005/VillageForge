@@ -163,12 +163,20 @@ class AssetFactory(private val engine: Engine) {
     }
 
     fun addRenderable(scene: Scene, mesh: Mesh, instance: MaterialInstance, transform: FloatArray): Int {
+        return addRenderable(scene, mesh, instance, transform, castShadows = true)
+    }
+
+    /** v2.2 — flat overlays (rain, window glow) skip the shadow pass. */
+    fun addRenderable(
+        scene: Scene, mesh: Mesh, instance: MaterialInstance, transform: FloatArray,
+        castShadows: Boolean,
+    ): Int {
         val entity = EntityManager.get().create()
         RenderableManager.Builder(1)
             .boundingBox(mesh.bounds)
             .geometry(0, RenderableManager.PrimitiveType.TRIANGLES, mesh.vertexBuffer, mesh.indexBuffer, 0, mesh.indexCount)
             .material(0, instance)
-            .castShadows(true).receiveShadows(true)
+            .castShadows(castShadows).receiveShadows(castShadows)
             .build(engine, entity)
         val transformManager = engine.transformManager
         transformManager.create(entity)
@@ -467,6 +475,9 @@ class CameraRig(private val engine: Engine) {
         targetFocusX = targetFocusX.coerceIn(-42f, 24f)
         targetFocusZ = targetFocusZ.coerceIn(-40f, 16f)
     }
+
+    /** v2.2 — where the camera looks; the rain column follows it. */
+    fun focus(): FloatArray = floatArrayOf(focusX, focusZ)
 
     fun screenToGround(px: Float, py: Float): FloatArray {
         val s = sin(yaw); val c = cos(yaw)

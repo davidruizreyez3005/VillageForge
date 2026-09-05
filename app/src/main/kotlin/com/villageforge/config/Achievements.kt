@@ -6,7 +6,7 @@ import com.villageforge.state.GameState
  * v2.1 medal board. Achievements are checked by [com.villageforge.systems.AchievementSystem]
  * at 10 Hz; each unlock pays a coin reward immediately.
  */
-enum class AchMetric { ORES_MINED, ROCKS_BROKEN, CRYSTAL_MINED, INGOTS_SMELTED, ITEMS_CRAFTED, COINS_EARNED, ORE_SOLD, PICK_TIER, LEVEL, MINERS, QUESTS_DONE, PLAY_MINUTES, OFFLINE_GAIN, FURNACE_OWNED }
+enum class AchMetric { ORES_MINED, ROCKS_BROKEN, CRYSTAL_MINED, INGOTS_SMELTED, ITEMS_CRAFTED, COINS_EARNED, ORE_SOLD, PICK_TIER, LEVEL, MINERS, QUESTS_DONE, PLAY_MINUTES, OFFLINE_GAIN, FURNACE_OWNED, COMMISSIONS_FILLED, PRESTIGE, RESIDENTS, RAIN_MINUTES }
 
 data class AchievementDef(
     val id: String,
@@ -46,6 +46,13 @@ object Achievements {
         AchievementDef("quests_done", "Valley Champion", "Complete the whole quest chain.", AchMetric.QUESTS_DONE, 1, 1_500),
         AchievementDef("play_60", "A Fine Evening", "Play for 60 minutes in total.", AchMetric.PLAY_MINUTES, 60, 100),
         AchievementDef("offline_1k", "Dreams of Idle", "Gather 1,000 ore and ingots while away.", AchMetric.OFFLINE_GAIN, 1_000, 350),
+        // v2.2 — the town layer.
+        AchievementDef("first_order", "A Name in the Valley", "Fill your first market commission.", AchMetric.COMMISSIONS_FILLED, 1, 60),
+        AchievementDef("orders_25", "The Trusted Smith", "Fill 25 commissions for market customers.", AchMetric.COMMISSIONS_FILLED, 25, 900),
+        AchievementDef("first_home", "Landlord", "Raise your first cottage.", AchMetric.RESIDENTS, 2, 150),
+        AchievementDef("town_50", "The Village Green", "Grow the village to 50 Prestige.", AchMetric.PRESTIGE, 50, 800),
+        AchievementDef("town_100", "A Proper Town", "Grow the village to 100 Prestige.", AchMetric.PRESTIGE, 100, 2_500),
+        AchievementDef("rain_5", "Petrichor", "Watch the rain fall on the village for 5 minutes in total.", AchMetric.RAIN_MINUTES, 5, 120),
     )
 
     fun byId(id: String): AchievementDef? = all.firstOrNull { it.id == id }
@@ -65,5 +72,9 @@ object Achievements {
         AchMetric.PLAY_MINUTES -> (gs.stats.playSeconds / 60f).toInt()
         AchMetric.OFFLINE_GAIN -> gs.stats.offlineGains
         AchMetric.FURNACE_OWNED -> if (gs.furnaceOwned) 1 else 0
+        AchMetric.COMMISSIONS_FILLED -> gs.stats.commissionsFilled
+        AchMetric.PRESTIGE -> gs.prestige()
+        AchMetric.RESIDENTS -> Town.residentsFor(gs.villageSlots)
+        AchMetric.RAIN_MINUTES -> (gs.stats.rainSeconds / 60f).toInt()
     }
 }

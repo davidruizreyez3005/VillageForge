@@ -4,12 +4,14 @@ import com.google.android.filament.*
 import com.villageforge.config.DayNight
 import com.villageforge.config.LightingProbe
 import com.villageforge.config.Theme
+import com.villageforge.config.Town
 import com.villageforge.config.WorldLayout
 import com.villageforge.state.GameState
 import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.sin
 import kotlin.math.sqrt
+import kotlin.math.tan
 import kotlin.random.Random
 
 class WorldRenderer(private val engine: Engine, private val game: GameState) {
@@ -56,6 +58,44 @@ class WorldRenderer(private val engine: Engine, private val game: GameState) {
     private val minerRigs = ArrayList<HumanoidRig>()
     private var clock = 0f
 
+    // v2.2 — The Village Update.
+    /** Renderables per slot / per build stage; visible while stage is bought. */
+    private val slotGroups = Array(Town.slots.size) { i -> Array(Town.slots[i].maxStage) { ArrayList<Int>() } }
+    private val slotVisible = Array(Town.slots.size) { i -> IntArray(Town.slots[i].maxStage) }
+    /** The well ladder grows cumulatively with prestige. */
+    private val wellGroups = Array(Town.wellTiers.size) { ArrayList<Int>() }
+    private val wellVisible = IntArray(Town.wellTiers.size)
+    private var windowInstance: MaterialInstance? = null
+    private val windmillSailEntities = IntArray(4)
+    private var windmillHubX = 0f
+    private var windmillHubY = 0f
+    private var windmillHubZ = 0f
+    private var sailPhase = 0f
+    private var fountainJetEntity = 0
+    private val villagerRigs = ArrayList<HumanoidRig>()
+    private val rigParked = ArrayList<Boolean>()
+
+    private companion object {
+        const val RAIN_COUNT = 64
+        const val RAIN_AREA = 17f
+        const val RAIN_TOP = 13f
+        const val RAIN_FALL_SPEED = 16f
+        const val ROOF_PITCH = 0.62f
+    }
+
+    private class RainStreak(val entity: Int) {
+        var x = 0f; var y = 0f; var z = 0f
+        var speed = 1f
+        var active = false
+    }
+
+    private val rainStreaks = ArrayList<RainStreak>()
+    private val rainInstance: MaterialInstance by lazy { assets.smokeInstance() }
+    private val rainScratch = FloatArray(16)
+    private val rainScratch2 = FloatArray(16)
+    private val rainM = FloatArray(16)
+    private val sailM = FloatArray(16)
+
     init {
         buildLights()
         buildTerrain()
@@ -67,6 +107,8 @@ class WorldRenderer(private val engine: Engine, private val game: GameState) {
         buildBin()
         buildFurnace()
         buildHollow()
+        buildVillage()
+        buildRain()
         playerRig.setPickTint(game.pickTier)
     }
 
@@ -406,6 +448,312 @@ class WorldRenderer(private val engine: Engine, private val game: GameState) {
         }
     }
 
+    // ---- The Village (v2.2) --------------------------------------------------
+
+    /** All buildings face the camera's three-quarter view (45° yaw). */
+    private val FACING = 45f
+
+    private fun addPart(
+        group: ArrayList<Int>, x: Float, y: Float, z: Float,
+        w: Float, h: Float, d: Float, instance: MaterialInstance, yaw: Float = FACING,
+    ): Int {
+        val e = assets.addRenderable(scene, assets.box, instance, Transforms.trs(x, y, z, w, h, d, yaw))
+        group.add(e)
+        return e
+    }
+
+    /** A pitched two-slope roof: the one flourish the box world allows. */
+    private val roofM = FloatArray(16)
+    private val roofM2 = FloatArray(16)
+    private val roofM3 = FloatArray(16)
+
+    private fun addRoof(group: ArrayList<Int>, x: Float, y: Float, z: Float, w: Float, d: Float, instance: MaterialInstance, yaw: Float = FACING) {
+        val a = ROOF_PITCH
+        val rise = (d / 2f) * tan(a)
+        val len = (d / 2f) / cos(a) + 0.28f
+        val yawRad = Math.toRadians(yaw.toDouble()).toFloat()
+        val c = cos(yawRad); val s = sin(yawRad)
+        for (side in floatArrayOf(1f, -1f)) {
+            // Slope midpoint: half-way between ridge (z=0) and eave (z=±d/2),
+            // rotated into the building's facing.
+            val mx = x + side * (d / 4f) * s
+            val mz = z + side * (d / 4f) * c
+            Transforms.rootInto(roofM, mx, y + rise / 2f - 0.06f, mz, yawRad, side * a)
+            Transforms.scale(roofM2, w + 0.5f, 0.16f, len)
+            Transforms.multiply(roofM3, roofM, roofM2)
+            val e = assets.addRenderable(scene, assets.box, instance, roofM3.copyOf())
+            group.add(e)
+        }
+        // Ridge cap along the roof line.
+        addPart(group, x, y + rise - 0.02f, z, 0.24f, 0.18f, d + 0.3f, instance, yaw)
+    }
+
+    /** Stage 0 of a house: a dug plot with stacked timber waiting. */
+    private fun buildHousePlot(group: ArrayList<Int>, x: Float, z: Float) {
+        val y = WorldLayout.groundHeight(x, z) - 0.02f
+        val soil = assets.material(Theme.SOIL, Theme.ROUGHNESS_TERRAIN)
+        val wood = assets.material(Theme.TIMBER, Theme.ROUGHNESS_PROP)
+        addPart(group, x, y, z, 2.8f, 0.08f, 2.4f, soil, 0f)
+        for (dx in floatArrayOf(-1.2f, 1.2f)) for (dz in floatArrayOf(-1.0f, 1.0f)) {
+            addPart(group, x + dx, y, z + dz, 0.13f, 1.0f, 0.13f, wood)
+        }
+        addPart(group, x - 0.3f, y + 0.1f, z, 1.6f, 0.22f, 0.5f, wood)
+        addPart(group, x + 0.4f, y + 0.1f, z + 0.2f, 1.1f, 0.22f, 0.5f, wood, FACING + 8f)
+    }
+
+    /** Stage 1: the cottage itself — plaster, timber, glowing windows, tiled roof. */
+    private fun buildCottage(group: ArrayList<Int>, x: Float, z: Float, longhouse: Boolean) {
+        val y = WorldLayout.groundHeight(x, z) - 0.02f
+        val w = if (longhouse) 3.1f else 2.6f
+        val d = 2.2f
+        val wallH = 1.9f
+        val plaster = assets.material(Theme.PLASTER, Theme.ROUGHNESS_PROP)
+        val timber = assets.material(Theme.TIMBER, Theme.ROUGHNESS_PROP)
+        val door = assets.material(Theme.DOOR_WOOD, Theme.ROUGHNESS_PROP)
+        val roof = assets.material(Theme.ROOF_TILE, Theme.ROUGHNESS_PROP)
+        windowInstance = windowInstance ?: assets.material(
+            Theme.WINDOW_GLOW, Theme.ROUGHNESS_PROP, Theme.METALLIC_DEFAULT,
+            emissive = Theme.WINDOW_GLOW, emissiveStrength = 0.05f,
+        )
+
+        addPart(group, x, y, z, w, wallH, d, plaster)
+        // Corner posts + a door and two shuttered windows on the street face.
+        for (dx in floatArrayOf(-w / 2f + 0.07f, w / 2f - 0.07f)) {
+            addPart(group, x + dx, y, z - d / 2f + 0.07f, 0.15f, wallH, 0.15f, timber)
+            addPart(group, x + dx, y, z + d / 2f - 0.07f, 0.15f, wallH, 0.15f, timber)
+        }
+        addPart(group, x - w / 4f, y, z + d / 2f + 0.02f, 0.62f, 1.25f, 0.1f, door)
+        addPart(group, x + w / 4f, y + 0.75f, z + d / 2f + 0.03f, 0.5f, 0.55f, 0.06f, windowInstance!!, yaw = FACING)
+        addPart(group, x + w / 2f + 0.03f, y + 0.75f, z - 0.2f, 0.06f, 0.55f, 0.5f, windowInstance!!)
+        addPart(group, x, y + wallH, z, w, 0.22f, d + 0.2f, timber)
+        addRoof(group, x, y + wallH + 0.2f, z, w, d, roof)
+        // Chimney on the longhouse.
+        if (longhouse) {
+            addPart(group, x - w / 3f, y + wallH + 0.2f, z - d / 5f, 0.34f, 1.5f, 0.34f, assets.material(Theme.WELL_STONE, Theme.ROUGHNESS_PROP))
+        }
+    }
+
+    private fun buildLamp(group: ArrayList<Int>, x: Float, z: Float) {
+        val y = WorldLayout.groundHeight(x, z)
+        val wood = assets.material(Theme.GATE_WOOD, Theme.ROUGHNESS_PROP)
+        lanternInstance = lanternInstance ?: assets.material(Theme.LANTERN_GLOW, Theme.ROUGHNESS_PROP, Theme.METALLIC_DEFAULT, Theme.LANTERN_GLOW, 0.05f)
+        addPart(group, x, y, z, 0.14f, 2.15f, 0.14f, wood, 0f)
+        addPart(group, x, y + 2.15f, z, 0.30f, 0.08f, 0.30f, wood, 0f)
+        addPart(group, x, y + 2.26f, z, 0.26f, 0.36f, 0.26f, lanternInstance!!, 0f)
+    }
+
+    private fun buildField(group: ArrayList<Int>, x: Float, z: Float) {
+        val y = WorldLayout.groundHeight(x, z) - 0.02f
+        val soil = assets.material(Theme.SOIL, Theme.ROUGHNESS_TERRAIN)
+        val wheat = assets.material(Theme.WHEAT, Theme.ROUGHNESS_PROP)
+        val wood = assets.material(Theme.TIMBER, Theme.ROUGHNESS_PROP)
+        addPart(group, x, y, z, 2.9f, 0.1f, 2.6f, soil, 0f)
+        for (row in 0 until 3) {
+            addPart(group, x, y + 0.08f, z - 0.8f + row * 0.8f, 2.5f, 0.16f, 0.42f, soil, 0f)
+            for (i in 0 until 4) {
+                val wx = x - 1.0f + i * 0.66f + (row % 2) * 0.18f
+                addPart(group, wx, y + 0.2f, z - 0.8f + row * 0.8f, 0.2f, 0.55f, 0.14f, wheat, 0f)
+            }
+        }
+        for (dx in floatArrayOf(-1.35f, 1.35f)) for (dz in floatArrayOf(-1.2f, 1.2f)) {
+            addPart(group, x + dx, y, z + dz, 0.12f, 0.7f, 0.12f, wood, 0f)
+        }
+    }
+
+    private fun buildGranary(group: ArrayList<Int>, x: Float, z: Float) {
+        val y = WorldLayout.groundHeight(x, z) - 0.02f
+        val wood = assets.material(Theme.BIN_WOOD, Theme.ROUGHNESS_PROP)
+        val thatch = assets.material(Theme.ROOF_THATCH, Theme.ROUGHNESS_PROP)
+        val timber = assets.material(Theme.TIMBER, Theme.ROUGHNESS_PROP)
+        // Raised on posts so the grain stays dry.
+        for (dx in floatArrayOf(-0.95f, 0.95f)) for (dz in floatArrayOf(-0.75f, 0.75f)) {
+            addPart(group, x + dx, y, z + dz, 0.15f, 1.0f, 0.15f, timber)
+        }
+        addPart(group, x, y + 1.0f, z, 2.3f, 1.15f, 1.9f, wood)
+        addRoof(group, x, y + 2.1f, z, 2.3f, 1.9f, thatch)
+        // A little ladder up the side.
+        addPart(group, x - 1.2f, y + 0.2f, z + 0.55f, 0.08f, 1.9f, 0.08f, timber, 12f)
+        addPart(group, x - 1.2f, y + 0.2f, z - 0.15f, 0.08f, 1.9f, 0.08f, timber, 12f)
+        for (r in 0 until 3) addPart(group, x - 1.2f, y + 0.45f + r * 0.55f, z + 0.2f, 0.62f, 0.07f, 0.07f, timber, 12f)
+    }
+
+    private fun buildWindmill(group: ArrayList<Int>, x: Float, z: Float) {
+        val y = WorldLayout.groundHeight(x, z) - 0.05f
+        val plaster = assets.material(Theme.PLASTER, Theme.ROUGHNESS_PROP)
+        val timber = assets.material(Theme.TIMBER, Theme.ROUGHNESS_PROP)
+        val sail = assets.material(Theme.SAIL_CLOTH, Theme.ROUGHNESS_PROP)
+        val metal = assets.material(Theme.ANVIL, Theme.ROUGHNESS_METAL, Theme.METALLIC_INGOT)
+        // Tapered tower in three lifts.
+        addPart(group, x, y, z, 2.1f, 2.4f, 2.1f, plaster)
+        addPart(group, x, y + 2.4f, z, 1.7f, 2.0f, 1.7f, plaster)
+        addPart(group, x, y + 4.4f, z, 1.3f, 1.6f, 1.3f, plaster)
+        for (lift in 0 until 2) addPart(group, x, y + lift * 2.2f + 2.1f, z, 2.2f - lift * 0.4f, 0.14f, 2.2f - lift * 0.4f, timber)
+        // Cap + door + window.
+        addPart(group, x, y + 6.0f, z, 1.5f, 0.8f, 1.5f, timber, 22f)
+        addPart(group, x, y, z + 1.0f, 0.7f, 1.3f, 0.1f, assets.material(Theme.DOOR_WOOD, Theme.ROUGHNESS_PROP))
+        windowInstance = windowInstance ?: assets.material(
+            Theme.WINDOW_GLOW, Theme.ROUGHNESS_PROP, Theme.METALLIC_DEFAULT,
+            emissive = Theme.WINDOW_GLOW, emissiveStrength = 0.05f,
+        )
+        addPart(group, x, y + 2.7f, z + 0.85f, 0.45f, 0.5f, 0.06f, windowInstance!!)
+        // The windshaft and hub on the tower's flank.
+        windmillHubX = x + 1.05f
+        windmillHubY = y + 5.1f
+        windmillHubZ = z
+        addPart(group, windmillHubX - 0.3f, windmillHubY - 0.25f, windmillHubZ, 0.9f, 0.5f, 0.5f, timber)
+        val hub = assets.addRenderable(scene, assets.box, metal, Transforms.trs(windmillHubX, windmillHubY - 0.25f, windmillHubZ - 0.25f, 0.36f, 0.36f, 0.36f))
+        group.add(hub)
+        for (i in 0 until 4) {
+            val e = assets.addRenderable(
+                scene, assets.box, sail,
+                Transforms.trs(windmillHubX, -100f, windmillHubZ, 0.001f, 0.001f, 0.001f),
+                castShadows = true,
+            )
+            windmillSailEntities[i] = e
+            group.add(e)
+        }
+    }
+
+    private fun buildChapel(group: ArrayList<Int>, x: Float, z: Float) {
+        val y = WorldLayout.groundHeight(x, z) - 0.02f
+        val stone = assets.material(Theme.CHAPEL_STONE, Theme.ROUGHNESS_PROP)
+        val roof = assets.material(Theme.ROOF_TILE, Theme.ROUGHNESS_PROP)
+        val dark = assets.material(Theme.MINE_DARK, Theme.ROUGHNESS_PROP)
+        windowInstance = windowInstance ?: assets.material(
+            Theme.WINDOW_GLOW, Theme.ROUGHNESS_PROP, Theme.METALLIC_DEFAULT,
+            emissive = Theme.WINDOW_GLOW, emissiveStrength = 0.05f,
+        )
+        // Nave.
+        addPart(group, x, y, z, 2.5f, 3.0f, 3.3f, stone)
+        addRoof(group, x, y + 3.0f, z, 2.5f, 3.3f, roof)
+        // Buttresses down both flanks.
+        for (dz in floatArrayOf(-1.1f, 0.2f)) for (dx in floatArrayOf(-1.35f, 1.35f)) {
+            addPart(group, x + dx, y, z + dz, 0.3f, 1.7f, 0.34f, stone)
+        }
+        // Door of two orders + a rose window.
+        addPart(group, x - 0.55f, y, z + 1.65f, 0.28f, 1.5f, 0.14f, stone)
+        addPart(group, x + 0.55f, y, z + 1.65f, 0.28f, 1.5f, 0.14f, stone)
+        addPart(group, x, y + 1.55f, z + 1.68f, 0.5f, 0.34f, 0.1f, dark)
+        addPart(group, x, y + 2.0f, z + 1.68f, 0.66f, 0.66f, 0.08f, windowInstance!!)
+        // Bell tower + open belfry + spire.
+        addPart(group, x - 1.5f, y, z - 1.6f, 1.1f, 4.2f, 1.1f, stone)
+        addPart(group, x - 1.5f, y + 4.2f, z - 1.6f, 1.3f, 0.22f, 1.3f, stone)
+        for (dx in floatArrayOf(-0.45f, 0.45f)) for (dz in floatArrayOf(-0.45f, 0.45f)) {
+            addPart(group, x - 1.5f + dx, y + 4.4f, z - 1.6f + dz, 0.14f, 0.7f, 0.14f, dark)
+        }
+        // The bell itself, hanging where it can be seen.
+        addPart(group, x - 1.5f, y + 4.7f, z - 1.6f, 0.28f, 0.34f, 0.28f, assets.material(Theme.ORE_GOLD, Theme.ROUGHNESS_METAL, Theme.METALLIC_INGOT))
+        addPart(group, x - 1.5f, y + 5.1f, z - 1.6f, 1.0f, 0.9f, 1.0f, roof, 22f)
+        addPart(group, x - 1.5f, y + 6.0f, z - 1.6f, 0.6f, 1.0f, 0.6f, roof, 45f)
+        addPart(group, x - 1.5f, y + 7.0f, z - 1.6f, 0.16f, 0.7f, 0.16f, dark)
+    }
+
+    /** The plaza and its well — the one thing that is always there. */
+    private fun buildWellTier(tier: Int) {
+        val group = wellGroups[tier]
+        val x = Town.WELL_X
+        val z = Town.WELL_Z
+        val y = WorldLayout.groundHeight(x, z) - 0.02f
+        val stone = assets.material(Theme.WELL_STONE, Theme.ROUGHNESS_PROP)
+        val wood = assets.material(Theme.GATE_WOOD, Theme.ROUGHNESS_PROP)
+        val water = assets.material(Theme.WELL_WATER, Theme.ROUGHNESS_PROP)
+        val roof = assets.material(Theme.ROOF_THATCH, Theme.ROUGHNESS_PROP)
+        when (tier) {
+            0 -> {
+                // Plaza pad + a low stone ring with water in it.
+                addPart(group, x, y, z, 5.5f, 0.07f, 5.5f, assets.material(Theme.PATH, Theme.ROUGHNESS_TERRAIN), 0f)
+                for (dz in floatArrayOf(-0.55f, 0.55f)) addPart(group, x, y, z + dz, 1.5f, 0.55f, 0.3f, stone, 0f)
+                for (dx in floatArrayOf(-0.55f, 0.55f)) addPart(group, x + dx, y, z, 0.3f, 0.55f, 1.5f, stone, 0f)
+                addPart(group, x, y + 0.18f, z, 1.0f, 0.06f, 1.0f, water, 0f)
+            }
+            1 -> {
+                // Raised rim + a stone apron around the ring.
+                for (dz in floatArrayOf(-0.55f, 0.55f)) addPart(group, x, y + 0.55f, z + dz, 1.5f, 0.3f, 0.32f, stone, 0f)
+                for (dx in floatArrayOf(-0.55f, 0.55f)) addPart(group, x + dx, y + 0.55f, z, 0.32f, 0.3f, 1.5f, stone, 0f)
+                addPart(group, x, y, z, 2.6f, 0.1f, 2.6f, assets.material(Theme.PATH, Theme.ROUGHNESS_TERRAIN), 0f)
+                // Path to the market.
+                addPart(group, x, y, z + 4.0f, 2.2f, 0.06f, 4.4f, assets.material(Theme.PATH, Theme.ROUGHNESS_TERRAIN), 0f)
+                addPart(group, x, y, z + 11.5f, 1.9f, 0.06f, 8.6f, assets.material(Theme.PATH, Theme.ROUGHNESS_TERRAIN), 0f)
+            }
+            2 -> {
+                // A roof over the well, posts, crossbar, and a bucket on a rope.
+                for (dx in floatArrayOf(-0.85f, 0.85f)) addPart(group, x + dx, y, z - 0.75f, 0.12f, 2.4f, 0.12f, wood, 0f)
+                addPart(group, x, y + 2.4f, z - 0.75f, 1.9f, 0.14f, 0.16f, wood, 0f)
+                addRoof(group, x, y + 2.5f, z - 0.4f, 1.9f, 1.7f, roof, 0f)
+                addPart(group, x, y + 2.1f, z - 0.75f, 0.05f, 0.6f, 0.05f, wood, 0f)
+                addPart(group, x, y + 1.5f, z - 0.75f, 0.3f, 0.28f, 0.3f, wood, 0f)
+            }
+            3 -> {
+                // An iron pump on a stone plinth.
+                val metal = assets.material(Theme.ANVIL, Theme.ROUGHNESS_METAL, Theme.METALLIC_INGOT)
+                addPart(group, x + 1.35f, y + 0.85f, z, 0.42f, 0.9f, 0.42f, metal, 0f)
+                addPart(group, x + 1.35f, y + 1.55f, z, 0.14f, 0.5f, 0.14f, metal, -25f)
+                addPart(group, x + 1.2f, y + 1.3f, z + 0.35f, 0.2f, 0.2f, 0.4f, metal, 0f)
+            }
+            else -> {
+                // The Millpond Fountain: a wide basin, a pillar, a live jet.
+                for (i in 0 until 8) {
+                    val a = i * 0.7854f
+                    addPart(group, x + cos(a) * 1.5f, y + 0.5f, z + sin(a) * 1.5f, 0.5f, 0.35f, 0.5f, stone, i * 45f)
+                }
+                addPart(group, x, y + 0.8f, z, 0.36f, 0.9f, 0.36f, stone, 0f)
+                addPart(group, x, y + 1.7f, z, 0.6f, 0.16f, 0.6f, stone, 0f)
+                fountainJetEntity = assets.addRenderable(
+                    scene, assets.box, water,
+                    Transforms.trs(x, y + 1.8f, z, 0.1f, 1.0f, 0.1f),
+                    castShadows = false,
+                )
+                group.add(fountainJetEntity)
+                for (i in 0 until 4) {
+                    val a = i * 1.5708f + 0.7854f
+                    addPart(group, x + cos(a) * 0.8f, y + 1.1f, z + sin(a) * 0.8f, 0.16f, 0.34f, 0.16f, water, 0f)
+                }
+            }
+        }
+    }
+
+    private fun buildVillage() {
+        for (i in Town.slots.indices) {
+            val slot = Town.slots[i]
+            for (stage in 0 until slot.maxStage) {
+                val group = slotGroups[i][stage]
+                when (slot.kind) {
+                    Town.SlotKind.HOUSE ->
+                        if (stage == 0) buildHousePlot(group, slot.x, slot.z)
+                        else buildCottage(group, slot.x, slot.z, slot.id == "house4")
+                    Town.SlotKind.LAMP -> buildLamp(group, slot.x, slot.z)
+                    Town.SlotKind.FIELD -> buildField(group, slot.x, slot.z)
+                    Town.SlotKind.FARM ->
+                        if (stage == 0) buildHousePlot(group, slot.x, slot.z)
+                        else buildCottage(group, slot.x, slot.z, false)
+                    Town.SlotKind.GRANARY -> buildGranary(group, slot.x, slot.z)
+                    Town.SlotKind.WINDMILL -> buildWindmill(group, slot.x, slot.z)
+                    Town.SlotKind.CHAPEL -> buildChapel(group, slot.x, slot.z)
+                }
+            }
+        }
+        for (tier in Town.wellTiers.indices) buildWellTier(tier)
+        syncVillage()
+    }
+
+    private fun buildRain() {
+        val rng = Random(31337)
+        for (i in 0 until RAIN_COUNT) {
+            val e = assets.addRenderable(
+                scene, assets.box, rainInstance,
+                Transforms.trs(0f, -100f, 0f, 0.001f, 0.001f, 0.001f),
+                castShadows = false,
+            )
+            val streak = RainStreak(e)
+            streak.x = (rng.nextFloat() * 2f - 1f) * RAIN_AREA
+            streak.z = (rng.nextFloat() * 2f - 1f) * RAIN_AREA
+            streak.y = rng.nextFloat() * RAIN_TOP
+            streak.speed = 0.8f + rng.nextFloat() * 0.5f
+            rainStreaks.add(streak)
+        }
+        rainInstance.setParameter("baseColor", Theme.RAIN.r, Theme.RAIN.g, Theme.RAIN.b, 0f)
+    }
+
     // ---- Per-frame sync ----------------------------------------------------
 
     fun onViewport(width: Int, height: Int) { cameraRig.setViewport(width, height) }
@@ -440,6 +788,9 @@ class WorldRenderer(private val engine: Engine, private val game: GameState) {
         syncBin()
         syncFurnace(deltaSeconds)
         syncMiners(deltaSeconds)
+        syncVillage()
+        syncTownsfolk(deltaSeconds)
+        updateRain(deltaSeconds)
         applyDayNight()
         effects.update(deltaSeconds)
         val alpha = tickAlpha()
@@ -506,6 +857,140 @@ class WorldRenderer(private val engine: Engine, private val game: GameState) {
         for (i in minerRigs.indices) {
             minerRigs[i].update(game.miners[i].body, alpha, dt, 0f)
         }
+    }
+
+    // ---- The Village, live (v2.2) --------------------------------------------
+
+    private fun syncVillage() {
+        for (i in Town.slots.indices) {
+            val built = game.villageSlots[i]
+            for (s in Town.slots[i].stages.indices) {
+                val visible = built > s
+                if (visible != (slotVisible[i][s] == 1)) {
+                    slotVisible[i][s] = if (visible) 1 else 0
+                    for (e in slotGroups[i][s]) {
+                        if (visible) scene.addEntity(e) else scene.removeEntity(e)
+                    }
+                }
+            }
+        }
+        val tier = Town.wellTierIndex(game.prestige())
+        for (t in Town.wellTiers.indices) {
+            val visible = tier >= t
+            if (visible != (wellVisible[t] == 1)) {
+                wellVisible[t] = if (visible) 1 else 0
+                for (e in wellGroups[t]) {
+                    if (visible) scene.addEntity(e) else scene.removeEntity(e)
+                }
+            }
+        }
+        // The windmill only turns once it is raised; the fountain jet only
+        // breathes once the well has grown into one.
+        val windmillIdx = Town.slotIndex("windmill")
+        if (game.villageSlots[windmillIdx] >= 1) {
+            sailPhase += 0.55f * (1f - 0.7f * game.weatherRain.coerceIn(0f, 1f))
+            val tm = engine.transformManager
+            for (i in 0 until 4) {
+                val theta = sailPhase + i * 1.5708f
+                Transforms.rootInto(roofM, windmillHubX, windmillHubY - 0.1f, windmillHubZ, 0f, theta)
+                Transforms.translation(roofM2, 0f, 1.35f, 0f)
+                Transforms.multiply(roofM3, roofM, roofM2)
+                Transforms.scale(roofM2, 0.1f, 2.3f, 0.42f)
+                Transforms.multiply(sailM, roofM3, roofM2)
+                tm.setTransform(tm.getInstance(windmillSailEntities[i]), sailM)
+            }
+        }
+        if (fountainJetEntity != 0 && wellVisible.last() == 1) {
+            val pulse = 0.75f + 0.25f * sin(clock * 3.1f)
+            val tm = engine.transformManager
+            val x = Town.WELL_X
+            val z = Town.WELL_Z
+            val y = WorldLayout.groundHeight(x, z) + 1.7f
+            tm.setTransform(
+                tm.getInstance(fountainJetEntity),
+                Transforms.trs(x, y, z, 0.1f, 1.15f * pulse, 0.1f),
+            )
+        }
+    }
+
+    /** Residents out on the streets + market customers, through one small rig pool. */
+    private fun syncTownsfolk(dt: Float) {
+        val walkers = ArrayList<com.villageforge.entities.Player>(Town.RESIDENT_RIGS + Town.CUSTOMER_RIGS)
+        for (r in game.residents) {
+            if (r.out) walkers.add(r.body)
+            if (walkers.size >= Town.RESIDENT_RIGS) break
+        }
+        var customers = 0
+        for (c in game.commissions) {
+            if (customers >= Town.CUSTOMER_RIGS) break
+            walkers.add(c.customer)
+            customers++
+        }
+        for (c in game.departingCustomers) {
+            if (customers >= Town.CUSTOMER_RIGS) break
+            walkers.add(c.customer)
+            customers++
+        }
+        while (villagerRigs.size < walkers.size.coerceAtLeast(Town.RESIDENT_RIGS)) {
+            val idx = villagerRigs.size
+            villagerRigs.add(HumanoidRig(engine, scene, assets, RigStyle.villager(idx + 2)))
+            rigParked.add(true)
+        }
+        val alpha = tickAlpha()
+        for (i in villagerRigs.indices) {
+            if (i < walkers.size) {
+                rigParked[i] = false
+                villagerRigs[i].update(walkers[i], alpha, dt, 0f)
+            } else if (!rigParked[i]) {
+                rigParked[i] = true
+                villagerRigs[i].park()
+            }
+        }
+    }
+
+    private fun updateRain(dt: Float) {
+        val rain = game.weatherRain.coerceIn(0f, 1f)
+        if (rain <= 0.02f) {
+            if (rainStreaks.isNotEmpty() && rainStreaks[0].active) {
+                for (s in rainStreaks) { s.active = false; parkStreak(s) }
+                rainInstance.setParameter("baseColor", Theme.RAIN.r, Theme.RAIN.g, Theme.RAIN.b, 0f)
+            }
+            return
+        }
+        val focus = cameraRig.focus()
+        val activeCount = (RAIN_COUNT * (0.35f + 0.65f * rain)).toInt().coerceAtLeast(8)
+        val tm = engine.transformManager
+        for (i in rainStreaks.indices) {
+            val s = rainStreaks[i]
+            if (i >= activeCount) {
+                if (s.active) { s.active = false; parkStreak(s) }
+                continue
+            }
+            if (!s.active) {
+                s.active = true
+                s.x = focus[0] + (Math.random().toFloat() * 2f - 1f) * RAIN_AREA
+                s.z = focus[1] + (Math.random().toFloat() * 2f - 1f) * RAIN_AREA
+                s.y = RAIN_TOP * (0.4f + 0.6f * Math.random().toFloat())
+            }
+            s.y -= RAIN_FALL_SPEED * s.speed * dt
+            val ground = WorldLayout.groundHeight(s.x, s.z)
+            if (s.y < ground) {
+                s.x = focus[0] + (Math.random().toFloat() * 2f - 1f) * RAIN_AREA
+                s.z = focus[1] + (Math.random().toFloat() * 2f - 1f) * RAIN_AREA
+                s.y = RAIN_TOP
+            }
+            // Slight forward slant so the shower reads as weather, not texture.
+            Transforms.rootInto(rainScratch, s.x, s.y, s.z, 0f, 0.14f)
+            Transforms.scale(rainScratch2, 0.03f, 0.62f, 0.03f)
+            Transforms.multiply(rainM, rainScratch, rainScratch2)
+            tm.setTransform(tm.getInstance(s.entity), rainM)
+        }
+        rainInstance.setParameter("baseColor", Theme.RAIN.r, Theme.RAIN.g, Theme.RAIN.b, 0.38f * rain)
+    }
+
+    private fun parkStreak(s: RainStreak) {
+        val tm = engine.transformManager
+        tm.setTransform(tm.getInstance(s.entity), Transforms.trs(0f, -100f, 0f, 0.001f, 0.001f, 0.001f))
     }
 
     private fun syncRocks(dt: Float) {
@@ -575,14 +1060,17 @@ class WorldRenderer(private val engine: Engine, private val game: GameState) {
         val elevationParam = sin(Math.PI * dayT.toDouble()).toFloat().coerceIn(0f, 1f)
         val horizonWarm = (elevationParam * 3.5f).coerceIn(0f, 1f)
 
-        val sunLux = lerp(DayNight.NIGHT_SUN_LUX, DayNight.DAY_SUN_LUX, daylight)
-        val ambientLux = lerp(DayNight.NIGHT_AMBIENT_LUX, DayNight.DAY_AMBIENT_LUX, daylight)
+        // v2.2 — a shower greys the light flat; the direct sun drops away,
+        // but never so far that the world stops being readable.
+        val rain = game.weatherRain.coerceIn(0f, 1f)
+        val sunLux = lerp(DayNight.NIGHT_SUN_LUX, DayNight.DAY_SUN_LUX, daylight) * (1f - 0.75f * rain)
+        val ambientLux = lerp(DayNight.NIGHT_AMBIENT_LUX, DayNight.DAY_AMBIENT_LUX, daylight) * (1f - 0.30f * rain)
 
         // Warm horizon sun that eases into cool moonlight without popping.
         val dayColor = mixRgb(DayNight.DUSK_SUN, DayNight.DAY_SUN, horizonWarm)
-        val sunColor = mixRgb(dayColor, DayNight.NIGHT_SUN, night)
+        val sunColor = mixRgb(mixRgb(dayColor, DayNight.NIGHT_SUN, night), Theme.OVERCAST_SKY, 0.55f * rain)
         val skyDay = mixRgb(DayNight.DUSK_SKY, DayNight.DAY_SKY, horizonWarm)
-        val skyColor = mixRgb(skyDay, DayNight.NIGHT_SKY, night)
+        val skyColor = mixRgb(mixRgb(skyDay, DayNight.NIGHT_SKY, night), Theme.OVERCAST_SKY, 0.75f * rain)
 
         val lm = engine.lightManager
         lm.setColor(sunLightInstance, sunColor.r, sunColor.g, sunColor.b)
@@ -605,6 +1093,8 @@ class WorldRenderer(private val engine: Engine, private val game: GameState) {
 
         // Lanterns, torches, crystals, and the monolith come alive at dusk.
         lanternInstance?.setParameter("emissiveStrength", 0.05f + 3.2f * night)
+        // v2.2 — and so do the windows of every built home: somebody is indoors.
+        windowInstance?.setParameter("emissiveStrength", 0.05f + 3.0f * night)
         val crystalGlow = 0.30f + 1.60f * night
         for (ci in crystalInstances) ci.setParameter("emissiveStrength", crystalGlow)
         monolithInstance?.setParameter("emissiveStrength", 0.55f + 2.4f * night)
@@ -633,6 +1123,12 @@ class WorldRenderer(private val engine: Engine, private val game: GameState) {
             for (i in 0 until rockCount) if (!rockVisible[i]) scene.addEntity(rockEntities[i])
             if (!binVisible) { scene.addEntity(binCrateEntity); scene.addEntity(binLidEntity) }
             if (!furnaceVisible) { for (e in furnaceEntities) scene.addEntity(e) }
+            for (i in Town.slots.indices) for (s in Town.slots[i].stages.indices) {
+                if (slotVisible[i][s] == 0) for (e in slotGroups[i][s]) scene.addEntity(e)
+            }
+            for (t in Town.wellTiers.indices) {
+                if (wellVisible[t] == 0) for (e in wellGroups[t]) scene.addEntity(e)
+            }
         }
         runCatching { assets.destroy(scene) }
         runCatching { engine.destroyEntity(sunEntity) }

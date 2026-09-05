@@ -2,6 +2,7 @@ package com.villageforge.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
@@ -18,13 +19,21 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 
 /** Shared palette + small widgets for the HUD and its sheets. */
 object UiColors {
@@ -152,6 +161,48 @@ fun ActionChip(label: String, enabled: Boolean, danger: Boolean = false, onClick
                 else -> UiColors.CHIP_BG
             }), RoundedCornerShape(8.dp))
             .clickable(enabled = enabled) { onClick() }
+            .padding(horizontal = 14.dp, vertical = 8.dp)
+    ) {
+        BasicText(
+            label,
+            style = TextStyle(
+                color = Color(if (enabled) UiColors.HEADER else UiColors.DIM),
+                fontSize = 13.sp, fontWeight = FontWeight.Bold,
+            ),
+        )
+    }
+}
+
+/**
+ * v2.2 — hold-to-buy (M45 of the original build): a tap still buys exactly
+ * one; press and hold and it keeps buying, speeding up, and stops on its own
+ * the moment you run out of coins or hit the cap.
+ */
+@Composable
+fun HoldRepeatChip(label: String, enabled: Boolean, onClick: () -> Unit) {
+    var pressed by remember { mutableStateOf(false) }
+    LaunchedEffect(pressed, enabled) {
+        if (pressed && enabled) {
+            onClick()
+            var interval = 420L
+            while (isActive && pressed && enabled) {
+                delay(interval)
+                onClick()
+                interval = (interval * 0.82f).toLong().coerceAtLeast(110L)
+            }
+        }
+    }
+    Box(
+        Modifier
+            .background(Color(if (enabled) UiColors.CHIP_BG else UiColors.CHIP_DISABLED), RoundedCornerShape(8.dp))
+            .pointerInput(enabled) {
+                detectTapGestures(
+                    onPress = {
+                        pressed = true
+                        try { awaitRelease() } finally { pressed = false }
+                    },
+                )
+            }
             .padding(horizontal = 14.dp, vertical = 8.dp)
     ) {
         BasicText(

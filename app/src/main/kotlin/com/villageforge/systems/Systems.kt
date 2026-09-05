@@ -10,6 +10,7 @@ import com.villageforge.config.Picks
 import com.villageforge.config.PlayerConfig
 import com.villageforge.config.Progression
 import com.villageforge.config.Quests
+import com.villageforge.config.Town
 import com.villageforge.config.Upgrades
 import com.villageforge.config.WorldLayout
 import com.villageforge.core.EventBus
@@ -115,20 +116,26 @@ class Economy(private val bus: EventBus) {
     private fun sellAll(gs: GameState) {
         var oreCount = 0
         var total = 0
+        val oreCountsSold = IntArray(Ore.entries.size)
         for (ore in Ore.entries) {
             val count = gs.inventory.countAt(ore) + gs.stockpile.countAt(ore)
+            oreCountsSold[ore.ordinal] = count
             oreCount += count
             total += count * ore.rawSell
         }
+        val ingotCountsSold = IntArray(Metal.entries.size)
         var ingotCount = 0
         for (metal in Metal.entries) {
             val count = gs.ingots.countAt(metal.ordinal)
+            ingotCountsSold[metal.ordinal] = count
             ingotCount += count
             total += count * metal.sell
         }
+        val itemCountsSold = IntArray(Item.entries.size)
         var itemCount = 0
         for (item in Item.entries) {
             val count = gs.items.countAt(item.ordinal)
+            itemCountsSold[item.ordinal] = count
             itemCount += count
             total += count * item.sell
         }
@@ -136,19 +143,36 @@ class Economy(private val bus: EventBus) {
             bus.notices.tryEmit(EventBus.Notice("Nothing to sell", EventBus.COLOR_WARN, WorldLayout.TRADE_POST_X, WorldLayout.TRADE_POST_Z))
             return
         }
+        // v2.2 — the farmstead's household pays a little more for everything.
+        val saleMul = Town.saleMul(gs.villageSlots)
+        val saleTotal = (total * saleMul).toInt().coerceAtLeast(total)
         gs.inventory.clearAll()
         gs.stockpile.clearAll()
         gs.ingots.clearAll()
         gs.items.clearAll()
-        gs.coins += total
-        gs.stats.coinsEarnedTotal += total
+        gs.coins += saleTotal
+        gs.stats.coinsEarnedTotal += saleTotal
         gs.stats.oreSold += oreCount
         bus.sfx.tryEmit(EventBus.Sfx(SfxId.COINS))
-        bus.notices.tryEmit(EventBus.Notice("+$total c", EventBus.COLOR_GOLD, WorldLayout.TRADE_POST_X, WorldLayout.TRADE_POST_Z))
+        bus.notices.tryEmit(EventBus.Notice("+$saleTotal c", EventBus.COLOR_GOLD, WorldLayout.TRADE_POST_X, WorldLayout.TRADE_POST_Z))
         if (ingotCount + itemCount > 0) {
             bus.notices.tryEmit(EventBus.Notice("$ingotCount ingots · $itemCount items", EventBus.COLOR_INFO, WorldLayout.TRADE_POST_X, WorldLayout.TRADE_POST_Z, -26f))
         }
-        levelsEvent(bus, gs, gs.addXp(total / 3 * Progression.XP_PER_3_COINS))
+        // v2.2 — renown rides on every sale (weighted by what the goods are
+        // worth), and anything sold counts against live market orders.
+        var renownGain = 0
+        for (ore in Ore.entries) renownGain += oreCountsSold[ore.ordinal] * Town.renownWeight(ore.rawSell)
+        for (metal in Metal.entries) renownGain += ingotCountsSold[metal.ordinal] * Town.renownWeight(metal.sell)
+        for (item in Item.entries) {
+            val count = itemCountsSold[item.ordinal]
+            renownGain += count * Town.renownWeight(item.sell)
+            if (count > 0) CommissionSystem.onSold(bus, gs, item, count)
+        }
+        renownGain = (renownGain * Town.renownMul(gs.villageSlots)).toInt().coerceAtLeast(1)
+        gs.renown += renownGain
+        gs.stats.renownEarned += renownGain
+        bus.notices.tryEmit(EventBus.Notice("+$renownGain renown", EventBus.COLOR_INFO, WorldLayout.TRADE_POST_X, WorldLayout.TRADE_POST_Z, -52f))
+        levelsEvent(bus, gs, gs.addXp(saleTotal / 3 * Progression.XP_PER_3_COINS))
     }
 }
 
@@ -607,7 +631,9 @@ object OfflineLogic {
 
         val oreGains = IntArray(Ore.entries.size)
         if (gs.miners.isNotEmpty()) {
-            val cycles = (elapsed / Miners.OFFLINE_SECONDS_PER_ORE).toInt()
+            // v2.2 — the windmill's sails keep the camp working harder too.
+            val secondsPerOre = Miners.OFFLINE_SECONDS_PER_ORE / Town.offlineMul(gs.villageSlots)
+            val cycles = (elapsed / secondsPerOre).toInt()
             val weights = IntArray(Ore.entries.size) { i ->
                 if (Ore.entries[i].requiredPick.ordinal <= gs.pickTier) Miners.OFFLINE_WEIGHTS[i] else 0
             }

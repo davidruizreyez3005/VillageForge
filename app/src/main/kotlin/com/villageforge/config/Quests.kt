@@ -4,6 +4,7 @@ package com.villageforge.config
 enum class QuestMetric {
     COPPER_MINED, ORE_SOLD, PICK_TIER, FORGE_BUILT, INGOTS_SMELTED, ITEMS_CRAFTED,
     MINERS_HIRED, GOLD_SMELTED, STEEL_PICK, CRYSTAL_BLADE, LEVEL, CRYSTAL_PICK, CRYSTAL_MINED,
+    COMMISSIONS_FILLED, PRESTIGE,
 }
 
 data class QuestDef(
@@ -30,6 +31,9 @@ object Quests {
         QuestDef("Legend's Edge", "Forge the Crystal Blade.", QuestMetric.CRYSTAL_BLADE, 1, 5000),
         // v2.1 — the Crystal Hollow opens west of the canyon.
         QuestDef("The West Trail", "Follow the lanterns west — find the Crystal Hollow.", QuestMetric.CRYSTAL_MINED, 1, 750),
+        // v2.2 — the town grows up around the workshop.
+        QuestDef("A Name in the Valley", "Fill 3 commissions for market customers.", QuestMetric.COMMISSIONS_FILLED, 3, 1200),
+        QuestDef("Raising the Town", "Grow the village to 40 Prestige.", QuestMetric.PRESTIGE, 40, 2000),
         QuestDef("Master Smith", "Buy the Crystal Pick.", QuestMetric.CRYSTAL_PICK, 1, 10000),
     )
 

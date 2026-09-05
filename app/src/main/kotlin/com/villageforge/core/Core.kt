@@ -20,9 +20,9 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
-enum class SfxId { ROCK_HIT, ROCK_BREAK, COINS, BUY, DENIED, SMELT, HAMMER, CRAFT, QUEST, LEVELUP, ACHIEVE }
+enum class SfxId { ROCK_HIT, ROCK_BREAK, COINS, BUY, DENIED, SMELT, HAMMER, CRAFT, QUEST, LEVELUP, ACHIEVE, ORDER }
 
-enum class Sheet { FORGE, SHOP, QUESTS, MEDALS }
+enum class Sheet { FORGE, SHOP, QUESTS, MEDALS, TOWN, ORDERS }
 
 class EventBus {
     data class OreMined(val ore: com.villageforge.config.Ore, val amount: Int, val x: Float, val z: Float)
@@ -37,6 +37,12 @@ class EventBus {
     data class TapMarker(val x: Float, val y: Float)
     data class UiRequest(val sheet: Sheet)
     data class AchievementUnlocked(val id: String, val title: String, val reward: Int)
+    /** v2.2 — a customer's order was placed (item, qty). */
+    data class OrderPlaced(val itemName: String, val needed: Int)
+    /** v2.2 — an order was completed by a sale (item, bounty coins). */
+    data class CommissionFilled(val itemName: String, val bounty: Int, val renown: Int)
+    /** v2.2 — a village slot advanced a stage (what it now says on the sign). */
+    data class VillageBuilt(val label: String, val complete: Boolean)
 
     val oreMined = MutableSharedFlow<OreMined>(extraBufferCapacity = 16, onBufferOverflow = BufferOverflow.DROP_OLDEST)
     val rockStruck = MutableSharedFlow<RockStruck>(extraBufferCapacity = 16, onBufferOverflow = BufferOverflow.DROP_OLDEST)
@@ -50,6 +56,9 @@ class EventBus {
     val tapMarker = MutableSharedFlow<TapMarker>(extraBufferCapacity = 8, onBufferOverflow = BufferOverflow.DROP_OLDEST)
     val uiRequest = MutableSharedFlow<UiRequest>(extraBufferCapacity = 4, onBufferOverflow = BufferOverflow.DROP_OLDEST)
     val achievementUnlocked = MutableSharedFlow<AchievementUnlocked>(extraBufferCapacity = 4, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+    val orderPlaced = MutableSharedFlow<OrderPlaced>(extraBufferCapacity = 4, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+    val commissionFilled = MutableSharedFlow<CommissionFilled>(extraBufferCapacity = 4, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+    val villageBuilt = MutableSharedFlow<VillageBuilt>(extraBufferCapacity = 4, onBufferOverflow = BufferOverflow.DROP_OLDEST)
 
     companion object {
         val COLOR_WARN: Int = 0xFFE2574C.toInt()
@@ -107,6 +116,7 @@ class InputManager(
         when {
             rockIndex >= 0 -> game.enqueue(GameState.Command.Mine(rockIndex))
             isOnFurnace(ground[0], ground[1]) -> bus.uiRequest.tryEmit(EventBus.UiRequest(Sheet.FORGE))
+            isOnWell(ground[0], ground[1]) -> bus.uiRequest.tryEmit(EventBus.UiRequest(Sheet.TOWN))
             isOnStall(ground[0], ground[1]) -> game.enqueue(GameState.Command.Sell)
             isOnBin(ground[0], ground[1]) -> game.enqueue(GameState.Command.Deposit)
             else -> {
@@ -115,6 +125,10 @@ class InputManager(
             }
         }
     }
+
+    /** The plaza well opens the town sheet — it IS the village ladder. */
+    private fun isOnWell(x: Float, z: Float): Boolean =
+        hypot(x - com.villageforge.config.Town.WELL_X, z - com.villageforge.config.Town.WELL_Z) < 1.8f
 
     private fun hitTestRock(x: Float, z: Float): Int {
         var best = -1
@@ -179,6 +193,24 @@ class SaveManager(context: Context) {
         val statsRocksBroken: Int = 0,
         val statsOfflineGains: Int = 0,
         val statsNightSeconds: Float = 0f,
+        // v4 additions (2.2 — the town layer)
+        val renown: Int = 0,
+        val honour: Int = 0,
+        val villageSlots: List<Int> = emptyList(),
+        val commissionItem: List<Int> = emptyList(),
+        val commissionNeeded: List<Int> = emptyList(),
+        val commissionFilled: List<Int> = emptyList(),
+        val commissionRemain: List<Float> = emptyList(),
+        val commissionBounty: List<Int> = emptyList(),
+        val commissionRenown: List<Int> = emptyList(),
+        val commissionHonour: List<Int> = emptyList(),
+        val weatherClock: Float = 0f,
+        val weatherWet: Boolean = false,
+        val statsCommissionsFilled: Int = 0,
+        val statsCommissionsExpired: Int = 0,
+        val statsRenownEarned: Int = 0,
+        val statsBuildStages: Int = 0,
+        val statsRainSeconds: Float = 0f,
     )
 
     /** What one slot row shows in the village picker. */
@@ -263,7 +295,7 @@ class SaveManager(context: Context) {
         if (!file.exists()) return false
         return try {
             val data = json.decodeFromString(SaveData.serializer(), file.readText())
-            if (data.version != VERSION && data.version != V2_VERSION && data.version != V1_VERSION) return false
+            if (data.version != VERSION && data.version != V2_VERSION && data.version != V1_VERSION && data.version != V3_VERSION) return false
             game.coins = data.coins
             game.pickTier = data.pickTier
             game.binOwned = data.binOwned
@@ -326,6 +358,41 @@ class SaveManager(context: Context) {
             game.stats.rocksBroken = data.statsRocksBroken
             game.stats.offlineGains = data.statsOfflineGains
             game.stats.nightSeconds = data.statsNightSeconds
+            // v4 fields (defaults cover v1/v2/v3 saves)
+            game.renown = data.renown
+            game.honour = data.honour
+            for (i in game.villageSlots.indices) {
+                if (i < data.villageSlots.size) game.villageSlots[i] = data.villageSlots[i].coerceIn(0, com.villageforge.config.Town.slots[i].maxStage)
+            }
+            game.commissions.clear()
+            if (data.commissionItem.size == data.commissionNeeded.size &&
+                data.commissionItem.size == data.commissionRemain.size &&
+                data.commissionItem.size == data.commissionBounty.size) {
+                for (i in data.commissionItem.indices) {
+                    val item = Item.entries.getOrNull(data.commissionItem[i]) ?: continue
+                    val def = com.villageforge.config.Town.commissions.firstOrNull { it.item == item } ?: continue
+                    val needed = data.commissionNeeded[i].coerceAtLeast(1)
+                    game.commissions.add(
+                        GameState.Commission(
+                            id = i,
+                            item = item,
+                            needed = needed,
+                            filled = (data.commissionFilled.getOrNull(i) ?: 0).coerceIn(0, needed),
+                            remain = data.commissionRemain[i].coerceIn(0f, def.secs),
+                            bounty = data.commissionBounty[i],
+                            renown = data.commissionRenown.getOrNull(i) ?: def.renown,
+                            honour = data.commissionHonour.getOrNull(i) ?: def.honour,
+                        )
+                    )
+                }
+            }
+            game.weatherClock = data.weatherClock.coerceAtLeast(30f)
+            game.weatherWet = false // a shower is a live-session mood; sessions start dry
+            game.stats.commissionsFilled = data.statsCommissionsFilled
+            game.stats.commissionsExpired = data.statsCommissionsExpired
+            game.stats.renownEarned = data.statsRenownEarned
+            game.stats.buildStages = data.statsBuildStages
+            game.stats.rainSeconds = data.statsRainSeconds
             true
         } catch (e: Exception) { false }
     }
@@ -365,6 +432,24 @@ class SaveManager(context: Context) {
                 statsRocksBroken = game.stats.rocksBroken,
                 statsOfflineGains = game.stats.offlineGains,
                 statsNightSeconds = game.stats.nightSeconds,
+                // v4 — the town layer
+                renown = game.renown,
+                honour = game.honour,
+                villageSlots = game.villageSlots.toList(),
+                commissionItem = game.commissions.map { it.item.ordinal },
+                commissionNeeded = game.commissions.map { it.needed },
+                commissionFilled = game.commissions.map { it.filled },
+                commissionRemain = game.commissions.map { it.remain },
+                commissionBounty = game.commissions.map { it.bounty },
+                commissionRenown = game.commissions.map { it.renown },
+                commissionHonour = game.commissions.map { it.honour },
+                weatherClock = if (game.weatherWet) 180f else game.weatherClock.coerceAtLeast(60f),
+                weatherWet = false,
+                statsCommissionsFilled = game.stats.commissionsFilled,
+                statsCommissionsExpired = game.stats.commissionsExpired,
+                statsRenownEarned = game.stats.renownEarned,
+                statsBuildStages = game.stats.buildStages,
+                statsRainSeconds = game.stats.rainSeconds,
             )
             val tmp = File(file.parentFile, file.name + ".tmp")
             tmp.writeText(json.encodeToString(SaveData.serializer(), data))
@@ -385,7 +470,8 @@ class SaveManager(context: Context) {
 
     companion object {
         const val SLOT_COUNT = 3
-        const val VERSION = 3
+        const val VERSION = 4
+        const val V3_VERSION = 3
         const val V2_VERSION = 2
         const val V1_VERSION = 1
         const val LEGACY_FILE_NAME = "villageforge_save.json"

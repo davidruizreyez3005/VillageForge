@@ -96,6 +96,7 @@ class AudioManager {
         SfxId.BUY -> 0.18f; SfxId.DENIED -> 0.14f
         SfxId.SMELT -> 0.50f; SfxId.HAMMER -> 0.20f; SfxId.CRAFT -> 0.50f
         SfxId.QUEST -> 0.60f; SfxId.LEVELUP -> 0.60f; SfxId.ACHIEVE -> 0.80f
+        SfxId.ORDER -> 0.45f
     }
 
     private fun render(v: Voice): Float {
@@ -160,6 +161,12 @@ class AudioManager {
                 val b = if (t > 0.22f) {
                     (sin(6.2831853f * 1174.66f * (t - 0.22f)) * 0.26f + sin(6.2831853f * 1760f * (t - 0.22f)) * 0.08f) * exp(-(t - 0.22f) * 2.6f)
                 } else 0f
+                a + b
+            }
+            SfxId.ORDER -> {
+                // A passing customer: two soft market-bell pings.
+                val a = sin(6.2831853f * 987.77f * t) * 0.22f * exp(-t * 6f)
+                val b = if (t > 0.18f) sin(6.2831853f * 1318.51f * (t - 0.18f)) * 0.18f * exp(-(t - 0.18f) * 6f) else 0f
                 a + b
             }
         }

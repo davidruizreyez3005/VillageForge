@@ -36,6 +36,7 @@ import com.villageforge.graphics.WorldRenderer
 import com.villageforge.state.GameState
 import com.villageforge.systems.AchievementSystem
 import com.villageforge.systems.Buildings
+import com.villageforge.systems.CommissionSystem
 import com.villageforge.systems.Craft
 import com.villageforge.systems.DayNightSystem
 import com.villageforge.systems.Economy
@@ -44,7 +45,10 @@ import com.villageforge.systems.Mining
 import com.villageforge.systems.MinerSystem
 import com.villageforge.systems.OfflineLogic
 import com.villageforge.systems.QuestSystem
+import com.villageforge.systems.TownsfolkSystem
 import com.villageforge.systems.UpgradeManager
+import com.villageforge.systems.VillageSystem
+import com.villageforge.systems.WeatherSystem
 import com.villageforge.ui.GameScreen
 import com.villageforge.ui.UiPhase
 import kotlinx.coroutines.Dispatchers
@@ -74,6 +78,10 @@ class MainActivity : ComponentActivity() {
     private lateinit var miners: MinerSystem
     private lateinit var quests: QuestSystem
     private lateinit var achievements: AchievementSystem
+    private lateinit var commissions: CommissionSystem
+    private lateinit var village: VillageSystem
+    private lateinit var weather: WeatherSystem
+    private lateinit var folks: TownsfolkSystem
     private var simJob: Job? = null
     private var autosaveTicks = 0
     private var startupFailed = false
@@ -164,6 +172,12 @@ class MainActivity : ComponentActivity() {
         miners = MinerSystem(bus)
         quests = QuestSystem(bus)
         achievements = AchievementSystem(bus)
+        commissions = CommissionSystem(bus)
+        village = VillageSystem(bus)
+        weather = WeatherSystem(bus)
+        folks = TownsfolkSystem(bus)
+        // v2.2 — customers of loaded orders walk back in from the road.
+        if (loaded) commissions.restoreWalkers(game)
         upgrades.syncBonuses(game)
         input = InputManager(this, world.cameraRig, game, bus)
 
@@ -204,6 +218,13 @@ class MainActivity : ComponentActivity() {
                 }
             }
             launch { bus.sfx.collect { audio.play(it.id, it.pitch) } }
+            launch {
+                bus.commissionFilled.collect {
+                    bus.notices.tryEmit(
+                        EventBus.Notice("${it.itemName} delivered · +${it.renown} renown", EventBus.COLOR_INFO, game.player.x, game.player.z, -66f)
+                    )
+                }
+            }
         }
 
         setContent {
@@ -406,6 +427,9 @@ class MainActivity : ComponentActivity() {
         economy.update(game)
         buildings.update(game)
         DayNightSystem.update(game, dt)
+        weather.update(game, dt)
+        commissions.update(game, dt)
+        folks.update(game, dt)
         quests.update(game)
         achievements.update(game)
         audio.music.nightFactor = DayNight.nightness(game.timeOfDay)
@@ -493,6 +517,7 @@ class MainActivity : ComponentActivity() {
                     }
                 }
                 is GameState.Command.BuyBin -> buildings.tryBuyBin(game)
+                is GameState.Command.BuildSlot -> village.tryBuild(game, command.slotIndex)
                 is GameState.Command.BuyForge -> buildings.tryBuyForge(game)
                 is GameState.Command.BuyPick -> {
                     upgrades.tryBuyPick(game)

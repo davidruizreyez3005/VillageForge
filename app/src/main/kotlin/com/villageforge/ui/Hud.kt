@@ -124,6 +124,8 @@ fun HudScreen(game: GameState, bus: EventBus, rig: CameraRig, save: SaveManager)
     val miners by game.minerFlow.collectAsState()
     val time by game.timeFlow.collectAsState()
     val musicOn by game.musicFlow.collectAsState()
+    val orders by game.ordersFlow.collectAsState()
+    val town by game.townFlow.collectAsState()
     val saveBroken by save.persistenceWarning.collectAsState()
 
     var sheet by remember { mutableStateOf<Sheet?>(null) }
@@ -141,8 +143,10 @@ fun HudScreen(game: GameState, bus: EventBus, rig: CameraRig, save: SaveManager)
             coins = coins,
             level = level,
             time = time,
+            orders = orders,
             soundOn = soundOn,
             musicOn = musicOn,
+            onOrders = { sheet = Sheet.ORDERS },
             onToggleSound = { game.enqueue(GameState.Command.ToggleSound) },
             onToggleMusic = { game.enqueue(GameState.Command.ToggleMusic) },
         )
@@ -175,6 +179,8 @@ fun HudScreen(game: GameState, bus: EventBus, rig: CameraRig, save: SaveManager)
             Sheet.SHOP -> ShopSheet(game, coins, binOwned, upgrades, miners, { sheet = null })
             Sheet.FORGE -> ForgeSheet(game, coins, forge, ingots, items, carry, stock, { sheet = null })
             Sheet.MEDALS -> MedalsSheet(game, { sheet = null })
+            Sheet.TOWN -> TownSheet(game, town, coins, { sheet = null })
+            Sheet.ORDERS -> OrdersSheet(orders, { sheet = null })
             Sheet.QUESTS -> QuestSheet(
                 quest,
                 StatsView(
@@ -184,6 +190,11 @@ fun HudScreen(game: GameState, bus: EventBus, rig: CameraRig, save: SaveManager)
                     itemsCrafted = game.stats.itemsCraftedTotal(),
                     minersHired = miners.count,
                     playSeconds = game.stats.playSeconds.toInt(),
+                    renownEarned = game.stats.renownEarned,
+                    commissionsFilled = game.stats.commissionsFilled,
+                    prestige = town.prestige,
+                    residents = town.residents,
+                    rainMinutes = (game.stats.rainSeconds / 60f).toInt(),
                 ),
                 { sheet = null },
             )
@@ -222,8 +233,10 @@ private fun TopBar(
     coins: Int,
     level: GameState.LevelSnapshot,
     time: Float,
+    orders: GameState.OrdersSnapshot,
     soundOn: Boolean,
     musicOn: Boolean,
+    onOrders: () -> Unit,
     onToggleSound: () -> Unit,
     onToggleMusic: () -> Unit,
 ) {
@@ -271,6 +284,8 @@ private fun TopBar(
             )
         }
         Spacer(Modifier.weight(1f))
+        OrdersChip(orders, onOrders)
+        Spacer(Modifier.width(8.dp))
         TimeChip(time)
         Spacer(Modifier.width(8.dp))
         Box(
@@ -290,6 +305,32 @@ private fun TopBar(
         ) {
             BasicText(if (soundOn) "🔊" else "🔇", style = TextStyle(fontSize = 15.sp))
         }
+    }
+}
+
+@Composable
+private fun OrdersChip(orders: GameState.OrdersSnapshot, onClick: () -> Unit) {
+    // Urgent (under a minute left) glows ember; a fresh order sits quiet.
+    val urgent = orders.orders.any { it.secsLeft < 60f }
+    val dot = when {
+        !orders.boardOpen -> UiColors.DIM
+        orders.orders.isEmpty() -> UiColors.GOOD
+        urgent -> UiColors.EMBER
+        else -> UiColors.COIN
+    }
+    Row(
+        Modifier
+            .background(Color(UiColors.PANEL), RoundedCornerShape(10.dp))
+            .clickable { onClick() }
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.size(9.dp).background(Color(dot), CircleShape))
+        Spacer(Modifier.width(6.dp))
+        BasicText(
+            if (orders.boardOpen) "${orders.orders.size}" else "—",
+            style = TextStyle(color = Color(UiColors.TEXT), fontSize = 13.sp, fontWeight = FontWeight.Bold),
+        )
     }
 }
 
@@ -331,11 +372,13 @@ private fun BottomBar(anyOpen: Boolean, onSelect: (Sheet) -> Unit, modifier: Mod
             .padding(bottom = 10.dp),
     ) {
         BarButton("🔨", "Forge", anyOpen) { onSelect(Sheet.FORGE) }
-        Spacer(Modifier.width(8.dp))
+        Spacer(Modifier.width(6.dp))
         BarButton("🛒", "Shop", anyOpen) { onSelect(Sheet.SHOP) }
-        Spacer(Modifier.width(8.dp))
+        Spacer(Modifier.width(6.dp))
+        BarButton("🏘️", "Town", anyOpen) { onSelect(Sheet.TOWN) }
+        Spacer(Modifier.width(6.dp))
         BarButton("📜", "Quests", anyOpen) { onSelect(Sheet.QUESTS) }
-        Spacer(Modifier.width(8.dp))
+        Spacer(Modifier.width(6.dp))
         BarButton("🏆", "Medals", anyOpen) { onSelect(Sheet.MEDALS) }
     }
 }
@@ -346,13 +389,13 @@ private fun BarButton(glyph: String, label: String, dim: Boolean, onClick: () ->
         Modifier
             .background(Color(if (dim) UiColors.PANEL else UiColors.PANEL_RAISED), RoundedCornerShape(12.dp))
             .clickable { onClick() }
-            .padding(horizontal = 18.dp, vertical = 8.dp),
+            .padding(horizontal = 13.dp, vertical = 8.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        BasicText(glyph, style = TextStyle(fontSize = 18.sp))
+        BasicText(glyph, style = TextStyle(fontSize = 17.sp))
         BasicText(
             label,
-            style = TextStyle(color = Color(UiColors.HEADER), fontSize = 12.sp, fontWeight = FontWeight.Bold),
+            style = TextStyle(color = Color(UiColors.HEADER), fontSize = 11.sp, fontWeight = FontWeight.Bold),
         )
     }
 }
