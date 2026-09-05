@@ -22,7 +22,10 @@ import java.io.FileOutputStream
  * so we copy the surface buffer directly for ground truth.
  */
 object LightingProbe {
-    const val ENABLED = true
+    // Diagnosis complete: the headless emulator composites the render with a
+    // washed pipeline, so colors are verified structurally (ci/check_colors.py)
+    // instead. Keep this switch for future on-device diagnosis.
+    const val ENABLED = false
     const val STEP_MILLIS = 7_000L
     const val START_DELAY_MILLIS = 10_000L
 

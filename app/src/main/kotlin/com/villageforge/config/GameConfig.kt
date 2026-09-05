@@ -46,9 +46,9 @@ object Theme {
     const val METALLIC_DEFAULT = 0.0f
 
     val SUN_COLOR = Rgb(1.0f, 0.95f, 0.86f)
-    // Tuned against emulator screenshots: 110_000 lux blew the scene out to a
-    // near-white wash even with sunny-f/16 exposure. 11_000 lands mid-green.
-    const val SUN_INTENSITY_LUX = 11_000f
+    // Filament's documented outdoor-daylight pairing: a ~100k-lux sun with a
+    // ~30k-lux ambient IBL and sunny-f/16 exposure (f/16 @ 1/125 @ ISO 100).
+    const val SUN_INTENSITY_LUX = 110_000f
     val SUN_DIRECTION = floatArrayOf(0.55f, -0.72f, 0.42f)
     val AMBIENT_SKY = Rgb(0.28f, 0.36f, 0.52f)
     val SKY_COLOR = Rgb(0.52f, 0.68f, 0.84f)

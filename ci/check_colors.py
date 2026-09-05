@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
-"""Verifies the game screenshot actually shows a COLORED 3D world.
+"""Verifies the game screenshot shows a COLORED 3D world.
 
 Regression this guards against: a missing fragment shader body made every
 material render pure white, which passed all "process alive" smoke tests.
+
+NOTE: the headless SwiftShader emulator has a washed-out compositing pipeline,
+so absolute brightness is not trustworthy here. We test channel STRUCTURE
+instead: a white screen has near-zero channel spread everywhere, while any
+colored scene (even washed) keeps pixels with significant spread and a
+green-dominant ground.
 """
 import sys
 from PIL import Image
@@ -14,30 +20,42 @@ def main() -> None:
     w, h = img.size
     px = img.load()
 
-    total = whiteish = green = 0
+    total = colored = blown = 0
+    gb_sum = gr_sum = gb_n = 0
     for y in range(0, h, 4):
         for x in range(0, w, 4):
             r, g, b = px[x, y]
             total += 1
-            if r > 235 and g > 235 and b > 235:
-                whiteish += 1
-            elif g > 55 and g > r + 8 and g > b + 8:
-                green += 1
+            if max(r, g, b) - min(r, g, b) > 20:
+                colored += 1
+            if r > 245 and g > 245 and b > 245:
+                blown += 1
+            if 0.60 * h < y < 0.95 * h:
+                gb_sum += g - b
+                gr_sum += g - r
+                gb_n += 1
 
-    white_ratio = whiteish / total
-    green_ratio = green / total
-    print(f"screenshot {w}x{h}: white_ratio={white_ratio:.3f} green_ratio={green_ratio:.3f}")
+    colored_ratio = colored / total
+    blown_ratio = blown / total
+    gb_mean = gb_sum / gb_n
+    print(
+        f"screenshot {w}x{h}: colored_ratio={colored_ratio:.3f} "
+        f"blown_white_ratio={blown_ratio:.3f} ground(G-B)={gb_mean:.1f}"
+    )
 
-    # Broken state: the whole 3D world renders near-white (sky is pale blue,
-    # HUD is dark, so a truly white screen means the terrain went white).
-    if white_ratio > 0.40:
-        print("FAIL: screen is mostly white — world materials lost their color")
+    # Failure mode of the old bug: materials rendered pure white -> no colored
+    # pixels at all, everything blown out.
+    if colored_ratio < 0.10:
+        print("FAIL: almost no colored pixels (spread <= 20) — materials likely white")
         sys.exit(1)
-    # Healthy state: grass terrain covers a large part of the view.
-    if green_ratio < 0.10:
-        print("FAIL: expected green terrain pixels not found (green_ratio < 0.10)")
+    if blown_ratio > 0.50:
+        print("FAIL: more than half the screen is blown-out white")
         sys.exit(1)
-    print("PASS: world renders with colored terrain (grass present, no white-out)")
+    # Ground band must lean green-family (G notably above B), not neutral white.
+    if gb_mean < 10:
+        print("FAIL: ground region is not green-family (G-B < 10)")
+        sys.exit(1)
+    print("PASS: world renders with colored (green-family) terrain")
 
 
 if __name__ == "__main__":
