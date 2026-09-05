@@ -2,6 +2,7 @@ package com.villageforge.state
 
 import com.villageforge.config.Buildings
 import com.villageforge.config.DayNight
+import com.villageforge.config.DebugConfig
 import com.villageforge.config.Item
 import com.villageforge.config.Metal
 import com.villageforge.config.Ore
@@ -45,7 +46,9 @@ class GameState {
     var pickTier = 0
     var bootsLevel = 0
     var backpackLevel = 0
-    var coins = 0
+    // v2.2.1 — the debug purse: fresh games start rich for playtesting;
+    // SaveManager.load() overwrites this with the saved amount.
+    var coins = if (DebugConfig.ENABLED) DebugConfig.START_GOLD else 0
     var binOwned = false
     var furnaceOwned = false
     var questIndex = 0

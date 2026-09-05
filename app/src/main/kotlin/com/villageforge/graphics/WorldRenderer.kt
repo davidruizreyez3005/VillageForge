@@ -650,35 +650,57 @@ class WorldRenderer(private val engine: Engine, private val game: GameState) {
         addPart(group, x - 1.5f, y + 7.0f, z - 1.6f, 0.16f, 0.7f, 0.16f, dark)
     }
 
-    /** The plaza and its well — the one thing that is always there. */
+    /** Era 0 — the plaza pad and the low stone ring of the first well. */
+    private fun buildWellCore(group: ArrayList<Int>, x: Float, z: Float) {
+        val y = WorldLayout.groundHeight(x, z) - 0.02f
+        val stone = assets.material(Theme.WELL_STONE, Theme.ROUGHNESS_PROP)
+        val water = assets.material(Theme.WELL_WATER, Theme.ROUGHNESS_PROP)
+        addPart(group, x, y, z, 5.5f, 0.07f, 5.5f, assets.material(Theme.PATH, Theme.ROUGHNESS_TERRAIN), 0f)
+        for (dz in floatArrayOf(-0.55f, 0.55f)) addPart(group, x, y, z + dz, 1.5f, 0.55f, 0.3f, stone, 0f)
+        for (dx in floatArrayOf(-0.55f, 0.55f)) addPart(group, x + dx, y, z, 0.3f, 0.55f, 1.5f, stone, 0f)
+        addPart(group, x, y + 0.18f, z, 1.0f, 0.06f, 1.0f, water, 0f)
+    }
+
+    /** Era 1 — a proper stone well: raised rim, apron, and the market paths. */
+    private fun buildStoneWell(group: ArrayList<Int>, x: Float, z: Float) {
+        val y = WorldLayout.groundHeight(x, z) - 0.02f
+        val stone = assets.material(Theme.WELL_STONE, Theme.ROUGHNESS_PROP)
+        val path = assets.material(Theme.PATH, Theme.ROUGHNESS_TERRAIN)
+        buildWellCore(group, x, z)
+        for (dz in floatArrayOf(-0.55f, 0.55f)) addPart(group, x, y + 0.55f, z + dz, 1.5f, 0.3f, 0.32f, stone, 0f)
+        for (dx in floatArrayOf(-0.55f, 0.55f)) addPart(group, x + dx, y + 0.55f, z, 0.32f, 0.3f, 1.5f, stone, 0f)
+        addPart(group, x, y, z, 2.6f, 0.1f, 2.6f, path, 0f)
+        // Path to the market.
+        addPart(group, x, y, z + 4.0f, 2.2f, 0.06f, 4.4f, path, 0f)
+        addPart(group, x, y, z + 11.5f, 1.9f, 0.06f, 8.6f, path, 0f)
+    }
+
+    /**
+     * v2.2.1 — every well era is SELF-CONTAINED and replaces the last: the
+     * old cumulative stack drew the ring, the raised rim, the roof, the
+     * pump, and the fountain all on the same spot at once, which read as a
+     * pile of floating masonry. Each tier now rebuilds the base it stands
+     * on, so exactly one well is ever visible.
+     */
     private fun buildWellTier(tier: Int) {
         val group = wellGroups[tier]
         val x = Town.WELL_X
         val z = Town.WELL_Z
         val y = WorldLayout.groundHeight(x, z) - 0.02f
-        val stone = assets.material(Theme.WELL_STONE, Theme.ROUGHNESS_PROP)
         val wood = assets.material(Theme.GATE_WOOD, Theme.ROUGHNESS_PROP)
-        val water = assets.material(Theme.WELL_WATER, Theme.ROUGHNESS_PROP)
         val roof = assets.material(Theme.ROOF_THATCH, Theme.ROUGHNESS_PROP)
         when (tier) {
             0 -> {
-                // Plaza pad + a low stone ring with water in it.
-                addPart(group, x, y, z, 5.5f, 0.07f, 5.5f, assets.material(Theme.PATH, Theme.ROUGHNESS_TERRAIN), 0f)
-                for (dz in floatArrayOf(-0.55f, 0.55f)) addPart(group, x, y, z + dz, 1.5f, 0.55f, 0.3f, stone, 0f)
-                for (dx in floatArrayOf(-0.55f, 0.55f)) addPart(group, x + dx, y, z, 0.3f, 0.55f, 1.5f, stone, 0f)
-                addPart(group, x, y + 0.18f, z, 1.0f, 0.06f, 1.0f, water, 0f)
+                // A dug well and a trampled plaza pad.
+                buildWellCore(group, x, z)
             }
             1 -> {
-                // Raised rim + a stone apron around the ring.
-                for (dz in floatArrayOf(-0.55f, 0.55f)) addPart(group, x, y + 0.55f, z + dz, 1.5f, 0.3f, 0.32f, stone, 0f)
-                for (dx in floatArrayOf(-0.55f, 0.55f)) addPart(group, x + dx, y + 0.55f, z, 0.32f, 0.3f, 1.5f, stone, 0f)
-                addPart(group, x, y, z, 2.6f, 0.1f, 2.6f, assets.material(Theme.PATH, Theme.ROUGHNESS_TERRAIN), 0f)
-                // Path to the market.
-                addPart(group, x, y, z + 4.0f, 2.2f, 0.06f, 4.4f, assets.material(Theme.PATH, Theme.ROUGHNESS_TERRAIN), 0f)
-                addPart(group, x, y, z + 11.5f, 1.9f, 0.06f, 8.6f, assets.material(Theme.PATH, Theme.ROUGHNESS_TERRAIN), 0f)
+                // Stone Well: raised rim, apron, and the market paths.
+                buildStoneWell(group, x, z)
             }
             2 -> {
-                // A roof over the well, posts, crossbar, and a bucket on a rope.
+                // Roofed Well: posts, crossbar, and a bucket on a rope.
+                buildStoneWell(group, x, z)
                 for (dx in floatArrayOf(-0.85f, 0.85f)) addPart(group, x + dx, y, z - 0.75f, 0.12f, 2.4f, 0.12f, wood, 0f)
                 addPart(group, x, y + 2.4f, z - 0.75f, 1.9f, 0.14f, 0.16f, wood, 0f)
                 addRoof(group, x, y + 2.5f, z - 0.4f, 1.9f, 1.7f, roof, 0f)
@@ -686,29 +708,40 @@ class WorldRenderer(private val engine: Engine, private val game: GameState) {
                 addPart(group, x, y + 1.5f, z - 0.75f, 0.3f, 0.28f, 0.3f, wood, 0f)
             }
             3 -> {
-                // An iron pump on a stone plinth.
+                // Pump Well: an iron pump on a plinth beside the ring.
+                buildStoneWell(group, x, z)
                 val metal = assets.material(Theme.ANVIL, Theme.ROUGHNESS_METAL, Theme.METALLIC_INGOT)
                 addPart(group, x + 1.35f, y + 0.85f, z, 0.42f, 0.9f, 0.42f, metal, 0f)
                 addPart(group, x + 1.35f, y + 1.55f, z, 0.14f, 0.5f, 0.14f, metal, -25f)
                 addPart(group, x + 1.2f, y + 1.3f, z + 0.35f, 0.2f, 0.2f, 0.4f, metal, 0f)
             }
             else -> {
-                // The Millpond Fountain: a wide basin, a pillar, a live jet.
-                for (i in 0 until 8) {
-                    val a = i * 0.7854f
-                    addPart(group, x + cos(a) * 1.5f, y + 0.5f, z + sin(a) * 1.5f, 0.5f, 0.35f, 0.5f, stone, i * 45f)
+                // The Millpond Fountain: a square stone basin whose wall is
+                // grounded on the plaza (v2.2.1 — it used to hover), a wide
+                // water surface, a pillar, and a live jet.
+                val stone = assets.material(Theme.WELL_STONE, Theme.ROUGHNESS_PROP)
+                val water = assets.material(Theme.WELL_WATER, Theme.ROUGHNESS_PROP)
+                addPart(group, x, y, z, 6.2f, 0.07f, 6.2f, assets.material(Theme.PATH, Theme.ROUGHNESS_TERRAIN), 0f)
+                val r = 1.45f
+                for (k in -1..1) {
+                    val off = k * 0.85f
+                    addPart(group, x + off, y + 0.1f, z - r, 0.8f, 0.6f, 0.35f, stone, 0f)
+                    addPart(group, x + off, y + 0.1f, z + r, 0.8f, 0.6f, 0.35f, stone, 0f)
+                    addPart(group, x - r, y + 0.1f, z + off, 0.35f, 0.6f, 0.8f, stone, 0f)
+                    addPart(group, x + r, y + 0.1f, z + off, 0.35f, 0.6f, 0.8f, stone, 0f)
                 }
-                addPart(group, x, y + 0.8f, z, 0.36f, 0.9f, 0.36f, stone, 0f)
-                addPart(group, x, y + 1.7f, z, 0.6f, 0.16f, 0.6f, stone, 0f)
+                addPart(group, x, y + 0.42f, z, 2.4f, 0.06f, 2.4f, water, 0f)
+                addPart(group, x, y + 0.45f, z, 0.36f, 1.1f, 0.36f, stone, 0f)
+                addPart(group, x, y + 1.55f, z, 0.6f, 0.16f, 0.6f, stone, 0f)
                 fountainJetEntity = assets.addRenderable(
                     scene, assets.box, water,
-                    Transforms.trs(x, y + 1.8f, z, 0.1f, 1.0f, 0.1f),
+                    Transforms.trs(x, y + 1.7f, z, 0.1f, 1.0f, 0.1f),
                     castShadows = false,
                 )
                 group.add(fountainJetEntity)
                 for (i in 0 until 4) {
                     val a = i * 1.5708f + 0.7854f
-                    addPart(group, x + cos(a) * 0.8f, y + 1.1f, z + sin(a) * 0.8f, 0.16f, 0.34f, 0.16f, water, 0f)
+                    addPart(group, x + cos(a) * 0.85f, y + 0.8f, z + sin(a) * 0.85f, 0.16f, 0.34f, 0.16f, water, 0f)
                 }
             }
         }
@@ -735,6 +768,14 @@ class WorldRenderer(private val engine: Engine, private val game: GameState) {
             }
         }
         for (tier in Town.wellTiers.indices) buildWellTier(tier)
+        // v2.2.1 fix — "the town is already built": addRenderable()
+        // registers every entity in the scene the moment it is created, so
+        // every slot stage (plot AND cottage overlapping), every lamp and
+        // chapel, and all five well eras rendered on day one no matter what
+        // the save said. Park ALL of it off-scene here; syncVillage() just
+        // below re-adds exactly the stages the player has paid for.
+        for (groups in slotGroups) for (group in groups) for (e in group) scene.removeEntity(e)
+        for (group in wellGroups) for (e in group) scene.removeEntity(e)
         syncVillage()
     }
 
@@ -878,7 +919,9 @@ class WorldRenderer(private val engine: Engine, private val game: GameState) {
         }
         val tier = Town.wellTierIndex(game.prestige())
         for (t in Town.wellTiers.indices) {
-            val visible = tier >= t
+            // v2.2.1 — well eras REPLACE one another (see buildWellTier):
+            // exactly one well is ever on screen.
+            val visible = tier == t
             if (visible != (wellVisible[t] == 1)) {
                 wellVisible[t] = if (visible) 1 else 0
                 for (e in wellGroups[t]) {

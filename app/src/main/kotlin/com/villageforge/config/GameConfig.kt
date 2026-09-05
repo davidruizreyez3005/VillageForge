@@ -7,7 +7,18 @@ import kotlin.math.max
 import kotlin.math.pow
 
 object BuildInfo {
-    const val VERSION = "2.2"
+    const val VERSION = "2.2.1"
+}
+
+/**
+ * v2.2.1 — the playtest harness, ON by default: every FRESH game starts
+ * with a full purse so builds can be exercised without the grind. Loading
+ * a save always restores the saved purse over this, and flipping ENABLED
+ * to false returns fresh games to the normal starting economy.
+ */
+object DebugConfig {
+    const val ENABLED = true
+    const val START_GOLD = 20_000
 }
 
 object Theme {

@@ -12,8 +12,8 @@ android {
         applicationId = "com.villageforge"
         minSdk = 24
         targetSdk = 34
-        versionCode = 8
-        versionName = "2.2"
+        versionCode = 9
+        versionName = "2.2.1"
     }
     signingConfigs {
         create("release") {
