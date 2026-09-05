@@ -13,6 +13,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.lifecycle.lifecycleScope
+import com.villageforge.config.BuildInfo
 import com.villageforge.config.WorldLayout
 import com.villageforge.core.AudioManager
 import com.villageforge.core.CrashReport
@@ -194,7 +195,7 @@ class MainActivity : ComponentActivity() {
      * Plain framework Views only (no Compose, no Filament): this screen must
      * render even when the entire rendering stack failed to initialize.
      */
-    private fun showReportScreen(text: String, allowContinue: Boolean) {
+    private fun showReportScreen(report: String, allowContinue: Boolean) {
         val pad = (16 * resources.displayMetrics.density).toInt()
         val scroll = ScrollView(this)
         val column = LinearLayout(this).apply {
@@ -209,7 +210,7 @@ class MainActivity : ComponentActivity() {
             setPadding(0, 0, 0, pad / 2)
         })
         column.addView(TextView(this).apply {
-            text = text
+            text = report
             setTextColor(0xFFE8E8E8.toInt())
             textSize = 12f
             setTextIsSelectable(true)

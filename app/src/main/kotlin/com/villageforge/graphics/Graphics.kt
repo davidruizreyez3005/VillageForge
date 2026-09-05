@@ -405,7 +405,7 @@ class FilamentHost {
             Engine.create()
         } catch (gl: Throwable) {
             try {
-                Engine.create(Backend.VULKAN)
+                Engine.create(Engine.Backend.VULKAN)
             } catch (vk: Throwable) {
                 val err = RuntimeException(
                     "Filament engine failed to start on both OpenGL and Vulkan backends"
