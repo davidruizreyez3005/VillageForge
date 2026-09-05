@@ -16,6 +16,7 @@ import androidx.lifecycle.lifecycleScope
 import com.villageforge.config.BuildInfo
 import com.villageforge.config.LightingProbe
 import com.villageforge.config.WorldLayout
+import java.io.File
 import com.villageforge.core.AudioManager
 import com.villageforge.core.CrashReport
 import com.villageforge.core.EventBus
@@ -134,13 +135,18 @@ class MainActivity : ComponentActivity() {
         setContent { GameScreen(host, input, game, bus, world.cameraRig, save) }
 
         if (LightingProbe.ENABLED) {
+            LightingProbe.outputDir = File(getExternalFilesDir(null), "probe")
+            LightingProbe.outputDir.mkdirs()
             lifecycleScope.launch {
                 delay(LightingProbe.START_DELAY_MILLIS)
                 while (isActive) {
                     for (i in LightingProbe.presets.indices) {
-                        world.applyProbePreset(LightingProbe.presets[i]) { linear -> host.setToneMapping(linear) }
+                        val preset = LightingProbe.presets[i]
+                        world.applyProbePreset(preset) { linear -> host.setToneMapping(linear) }
                         LightingProbe.activeIndex.intValue = i
-                        delay(LightingProbe.STEP_MILLIS)
+                        delay(4_000)
+                        LightingProbe.captureSurface("${i + 1}_${preset.label}")
+                        delay(LightingProbe.STEP_MILLIS - 4_000)
                     }
                 }
             }

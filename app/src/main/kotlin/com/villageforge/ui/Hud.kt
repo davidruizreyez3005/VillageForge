@@ -62,6 +62,7 @@ fun GameScreen(host: FilamentHost, input: InputManager, game: GameState, bus: Ev
             modifier = Modifier.fillMaxSize(),
             factory = { context ->
                 SurfaceView(context).apply {
+                    LightingProbe.surfaceView = this
                     holder.addCallback(object : SurfaceHolder.Callback {
                         override fun surfaceCreated(holder: SurfaceHolder) { host.onSurfaceAvailable(holder.surface) }
                         override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) { host.onSurfaceChanged(width, height) }
@@ -133,7 +134,7 @@ fun HudScreen(game: GameState, bus: EventBus, rig: CameraRig, save: SaveManager)
         if (LightingProbe.ENABLED && LightingProbe.activeIndex.intValue >= 0) {
             val preset = LightingProbe.presets[LightingProbe.activeIndex.intValue]
             BasicText(
-                "PROBE ${LightingProbe.activeIndex.intValue + 1}/8 ${preset.label}",
+                "PROBE ${LightingProbe.activeIndex.intValue + 1}/${LightingProbe.presets.size} ${preset.label}",
                 modifier = Modifier
                     .align(Alignment.Center)
                     .background(Color(0xCC000000), RoundedCornerShape(8.dp))

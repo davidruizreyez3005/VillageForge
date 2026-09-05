@@ -34,7 +34,7 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
-      - name: Cycle lighting presets and capture screenshots
+      - name: Cycle lighting presets, capture screencaps + PixelCopy surface dumps
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 30
@@ -46,14 +46,22 @@ jobs:
             adb install -r app/build/outputs/apk/release/app-release.apk
             adb logcat -c
             adb shell am start -W -n com.villageforge/.MainActivity
-            sleep 14
-            for k in $(seq 1 14); do adb exec-out screencap -p > probe_$k.png; sleep 6; done
+            sleep 10
+            adb exec-out screencap -p > probe_screen.png
+            sleep 58
+            adb root
+            sleep 4
+            adb pull /sdcard/Android/data/com.villageforge/files/probe surface_captures
+            adb logcat -d > probe_logcat.txt
             echo "=== PROBE CAPTURE DONE ==="
 
-      - name: Upload probe screenshots
+      - name: Upload probe artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: lighting-probe-shots
-          path: probe_*.png
-          if-no-files-found: error
+          name: lighting-probe-v2
+          path: |
+            probe_screen.png
+            surface_captures/**
+            probe_logcat.txt
+          if-no-files-found: warn
