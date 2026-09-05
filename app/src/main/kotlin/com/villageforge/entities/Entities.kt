@@ -16,6 +16,10 @@ class Rock(val index: Int, val ore: Ore, val x: Float, val z: Float) {
     fun reset() { alive = true; hp = ore.rockHp }
 }
 
+/**
+ * Shared walk/turn/pose state for the blacksmith and every hired miner.
+ * The simulation moves it; the renderer interpolates prev/current each frame.
+ */
 class Player {
     var x = WorldLayout.SPAWN_X
     var z = WorldLayout.SPAWN_Z
@@ -78,4 +82,12 @@ class Player {
         val maxStep = PlayerConfig.TURN_RATE * dt
         facing += delta.coerceIn(-maxStep, maxStep)
     }
+}
+
+/**
+ * A hired miner. Movement/pose lives in [body]; the AI state machine driving
+ * it (target rock, carrying, cooldown) lives in systems.MinerSystem.
+ */
+class Miner(val index: Int, val styleIndex: Int) {
+    val body = Player()
 }

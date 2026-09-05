@@ -33,13 +33,13 @@ jobs:
       - name: Stage APK
         run: |
           mkdir -p dist
-          cp app/build/outputs/apk/release/app-release.apk dist/VillageForge-v1.3.apk
+          cp app/build/outputs/apk/release/app-release.apk dist/VillageForge-v2.0.apk
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: village-forge-apk
-          path: dist/VillageForge-v1.3.apk
+          path: dist/VillageForge-v2.0.apk
           retention-days: 30
           if-no-files-found: error
 
@@ -69,9 +69,11 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           disable-animations: true
           script: |
-            adb install -r dist/VillageForge-v1.3.apk
+            adb install -r dist/VillageForge-v2.0.apk
             adb logcat -c
-            adb shell am start -W -n com.villageforge/.MainActivity
+            # phase=game fast-forwards past the title screen so the smoke test
+            # exercises the live 3D world and HUD directly.
+            adb shell am start -W -n com.villageforge/.MainActivity --es phase game
             sleep 20
             adb logcat -d > full_logcat.txt
             adb shell "pidof com.villageforge" | grep -qE "[0-9]" && echo "=== APP IS STILL RUNNING — pid check PASSED ===" || { echo "=== APP PROCESS DIED ==="; exit 1; }
@@ -113,11 +115,23 @@ jobs:
           name: village-forge-apk
           path: dist
 
-      - name: Publish to GitHub Releases (tag v1.3)
+      - name: Publish to GitHub Releases (tag v2.0)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create v1.3 dist/VillageForge-v1.3.apk \
-            --title "Village Forge v1.3" \
-            --notes "Colors and controls fixed. The world materials were rendering pure white because the lit material never assigned baseColor in its fragment shader — the full color palette (green grass, ore rocks, buildings, sky) now renders. Panning and pinch-zoom directions corrected. CI now screenshots the emulator and verifies the terrain is actually colored before every release." \
-            || gh release upload v1.3 dist/VillageForge-v1.3.apk --clobber
+          gh release create v2.0 dist/VillageForge-v2.0.apk \
+            --title "Village Forge v2.0 — The Forge Update" \
+            --notes "The blacksmith's workshop is open. Build the furnace, smelt ore into ingots, and hammer out goods worth far more than raw stone.
+
+          New in v2.0:
+          - The Forge: a full smelt-and-craft chain — furnace queue, anvil hammering with sparks and smoke, six ingots, seven craftable goods
+          - North Canyon: a new gated mining area with silver, gold, and crystal veins
+          - Hired Miners: up to five hands that keep working (and keep earning) while you're away
+          - Quests: a twelve-step objective chain with coin rewards, plus a chronicle/stats screen
+          - Levels & XP: earn XP for everything you do, with level-up bonuses
+          - Day/night cycle with dawn/dusk skies, torches, and a glowing forge at night
+          - Redesigned HUD: top bar with coins/level/time, bottom action bar, recipe-card forge sheet
+          - Title screen and loading flow, tap ripples, rock debris particles
+          - Two-finger camera orbit, smoother zoom with pitch, upgraded character models (hair, beard, boots, ore sack) and richer walk animations
+          - Economy rebalance: cheaper mid-tier picks, smoother progression to the new Crystal Pick" \
+            || gh release upload v2.0 dist/VillageForge-v2.0.apk --clobber

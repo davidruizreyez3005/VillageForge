@@ -12,6 +12,9 @@ import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.lifecycle.lifecycleScope
 import com.villageforge.config.BuildInfo
 import com.villageforge.config.LightingProbe
@@ -27,10 +30,17 @@ import com.villageforge.graphics.FilamentHost
 import com.villageforge.graphics.WorldRenderer
 import com.villageforge.state.GameState
 import com.villageforge.systems.Buildings
+import com.villageforge.systems.Craft
+import com.villageforge.systems.DayNightSystem
 import com.villageforge.systems.Economy
+import com.villageforge.systems.Forge
 import com.villageforge.systems.Mining
+import com.villageforge.systems.MinerSystem
+import com.villageforge.systems.OfflineLogic
+import com.villageforge.systems.QuestSystem
 import com.villageforge.systems.UpgradeManager
 import com.villageforge.ui.GameScreen
+import com.villageforge.ui.UiPhase
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -53,9 +63,15 @@ class MainActivity : ComponentActivity() {
     private lateinit var economy: Economy
     private lateinit var buildings: Buildings
     private lateinit var upgrades: UpgradeManager
+    private lateinit var forge: Forge
+    private lateinit var craft: Craft
+    private lateinit var miners: MinerSystem
+    private lateinit var quests: QuestSystem
     private var simJob: Job? = null
     private var autosaveTicks = 0
     private var startupFailed = false
+
+    private var uiPhase by mutableStateOf(UiPhase.TITLE)
 
     private val tickNanos = (GameState.TICK_SECONDS * 1e9f).toLong()
 
@@ -100,7 +116,16 @@ class MainActivity : ComponentActivity() {
         bus = EventBus()
         game = GameState()
         save = SaveManager(this)
-        save.load(game)
+        val loaded = save.load(game)
+
+        // Offline progress: hired miners keep digging, the furnace keeps pouring.
+        if (loaded && save.lastPlayedEpochMs > 0L) {
+            val elapsed = (System.currentTimeMillis() - save.lastPlayedEpochMs) / 1000f
+            game.offlineReport = OfflineLogic.apply(game, elapsed)
+        }
+        // Prime the UI flows with the loaded state before the HUD appears.
+        game.publishUi()
+
         audio = AudioManager()
         audio.enabled = game.sfxEnabled
 
@@ -113,8 +138,15 @@ class MainActivity : ComponentActivity() {
         economy = Economy(bus)
         buildings = Buildings(bus)
         upgrades = UpgradeManager(bus)
+        forge = Forge(bus)
+        craft = Craft(bus)
+        miners = MinerSystem(bus)
+        quests = QuestSystem(bus)
         upgrades.syncBonuses(game)
         input = InputManager(this, world.cameraRig, game, bus)
+
+        // CI / automation fast-path: launch straight into the game world.
+        if (intent?.getStringExtra("phase") == "game") uiPhase = UiPhase.GAME
 
         lifecycleScope.launch {
             launch {
@@ -123,7 +155,24 @@ class MainActivity : ComponentActivity() {
                     audio.play(SfxId.ROCK_HIT, 0.9f + 0.2f * (it.rockIndex % 5) / 4f)
                 }
             }
+            launch {
+                bus.minerStruck.collect { world.onRockStruck(it.rockIndex) }
+            }
             launch { bus.oreMined.collect { audio.play(SfxId.ROCK_BREAK) } }
+            launch {
+                bus.hammerStruck.collect {
+                    world.onHammerStruck(it.x, it.z)
+                    audio.play(SfxId.HAMMER, 0.95f + 0.05f * (System.nanoTime() % 3))
+                }
+            }
+            launch { bus.smeltDone.collect { audio.play(SfxId.SMELT) } }
+            launch { bus.itemCrafted.collect { audio.play(SfxId.CRAFT) } }
+            launch {
+                bus.levelUp.collect {
+                    audio.play(SfxId.LEVELUP)
+                    bus.notices.tryEmit(EventBus.Notice("Level ${it.newLevel}!", EventBus.COLOR_GOLD, game.player.x, game.player.z, -52f))
+                }
+            }
             launch {
                 bus.notices.collect {
                     if (it.colorArgb == EventBus.COLOR_WARN) audio.play(SfxId.DENIED)
@@ -132,7 +181,17 @@ class MainActivity : ComponentActivity() {
             launch { bus.sfx.collect { audio.play(it.id, it.pitch) } }
         }
 
-        setContent { GameScreen(host, input, game, bus, world.cameraRig, save) }
+        setContent {
+            GameScreen(
+                host, input, game, bus, world.cameraRig, save,
+                phase = uiPhase,
+                onPhaseChange = { uiPhase = it },
+                onReset = {
+                    save.reset()
+                    recreate()
+                },
+            )
+        }
 
         if (LightingProbe.ENABLED) {
             LightingProbe.outputDir = File(getExternalFilesDir(null), "probe")
@@ -272,11 +331,19 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun stepSim(dt: Float) {
+        // The world idles behind the title screen; the sim only runs in-game.
+        if (uiPhase != UiPhase.GAME) return
         drainCommands()
         game.player.update(dt)
+        miners.update(game, dt)
         mining.update(game, dt)
+        forge.update(game, dt)
+        craft.update(game, dt)
         economy.update(game)
         buildings.update(game)
+        DayNightSystem.update(game, dt)
+        quests.update(game)
+        game.stats.playSeconds += dt
         game.publishUi()
         if (++autosaveTicks >= AUTOSAVE_TICKS) {
             autosaveTicks = 0
@@ -288,6 +355,8 @@ class MainActivity : ComponentActivity() {
         mining.clearTarget(game.player)
         economy.clearTarget()
         buildings.clearTarget()
+        forge.clearLoadTarget()
+        craft.clear(game)
     }
 
     /** Walk-to point `distance` units short of (tx, tz), on the line from the player. */
@@ -341,10 +410,29 @@ class MainActivity : ComponentActivity() {
                     player.setTarget(stand.first, stand.second)
                     buildings.setDepositTarget()
                 }
+                is GameState.Command.LoadFurnace -> {
+                    clearInteractionTargets()
+                    if (forge.requestLoad(game, command.metal)) {
+                        val stand = standPoint(player.x, player.z, WorldLayout.FURNACE_X, WorldLayout.FURNACE_Z, 1.9f)
+                        player.setTarget(stand.first, stand.second)
+                    }
+                }
+                is GameState.Command.Craft -> {
+                    clearInteractionTargets()
+                    if (craft.request(game, command.item)) {
+                        val stand = standPoint(player.x, player.z, WorldLayout.ANVIL_X, WorldLayout.ANVIL_Z, 1.7f)
+                        player.setTarget(stand.first, stand.second)
+                    }
+                }
                 is GameState.Command.BuyBin -> buildings.tryBuyBin(game)
-                is GameState.Command.BuyPick -> upgrades.tryBuyPick(game)
+                is GameState.Command.BuyForge -> buildings.tryBuyForge(game)
+                is GameState.Command.BuyPick -> {
+                    upgrades.tryBuyPick(game)
+                    world.onPickUpgraded(game.pickTier)
+                }
                 is GameState.Command.BuyBoots -> upgrades.tryBuyBoots(game)
                 is GameState.Command.BuyBackpack -> upgrades.tryBuyBackpack(game)
+                is GameState.Command.HireMiner -> miners.hire(game)
                 is GameState.Command.ToggleSound -> {
                     game.sfxEnabled = !game.sfxEnabled
                     audio.enabled = game.sfxEnabled

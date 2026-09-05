@@ -90,6 +90,8 @@ class AudioManager {
     private fun dur(id: SfxId): Float = when (id) {
         SfxId.ROCK_HIT -> 0.15f; SfxId.ROCK_BREAK -> 0.35f; SfxId.COINS -> 0.40f
         SfxId.BUY -> 0.18f; SfxId.DENIED -> 0.14f
+        SfxId.SMELT -> 0.50f; SfxId.HAMMER -> 0.20f; SfxId.CRAFT -> 0.50f
+        SfxId.QUEST -> 0.60f; SfxId.LEVELUP -> 0.60f
     }
 
     private fun render(v: Voice): Float {
@@ -112,6 +114,42 @@ class AudioManager {
             SfxId.BUY -> sin(w * 170f) * 0.5f * exp(-t * 22f)
             SfxId.DENIED ->
                 (sign(sin(w * 150f)) + sign(sin(w * 151.8f))) * 0.12f * (1f - t / 0.14f).coerceAtLeast(0f)
+            SfxId.SMELT -> {
+                // Pour hiss settling into a warm shimmer.
+                val hiss = noise[(v.seed + (v.phase shr 1)) and 4095] * 0.22f * exp(-t * 5f)
+                val shimmer = (sin(w * 1560f * p) * 0.25f + sin(w * 2340f * p) * 0.16f) * exp(-t * 4f)
+                hiss + shimmer
+            }
+            SfxId.HAMMER -> {
+                // Metallic clang: inharmonic partials + a click transient.
+                val clang = (sin(w * 2100f * p) * 0.40f + sin(w * 1050f * p) * 0.22f + sin(w * 3170f * p) * 0.12f) * exp(-t * 26f)
+                val click = noise[(v.seed + v.phase) and 4095] * 0.30f * ((1f - v.phase.toFloat() / 160).coerceAtLeast(0f))
+                clang + click
+            }
+            SfxId.CRAFT -> {
+                // Final thud, then a bright two-note chime.
+                val thud = sin(w * 520f) * 0.45f * exp(-t * 12f)
+                val chime = if (t > 0.12f) {
+                    (sin(6.2831853f * 1240f * (t - 0.12f)) * 0.22f + sin(6.2831853f * 1860f * (t - 0.12f)) * 0.10f) *
+                        exp(-(t - 0.12f) * 7f)
+                } else 0f
+                thud + chime
+            }
+            SfxId.QUEST -> {
+                // Rising three-note fanfare.
+                val f = when {
+                    t < 0.16f -> 523.25f
+                    t < 0.32f -> 659.25f
+                    else -> 783.99f
+                }
+                val local = if (t < 0.16f) t else if (t < 0.32f) t - 0.16f else t - 0.32f
+                sin(6.2831853f * f * local) * 0.35f * (exp(-local * 5f) * (1f - t / 0.6f).coerceAtLeast(0f) + 0.15f)
+            }
+            SfxId.LEVELUP -> {
+                // Bright rising sweep.
+                val sweepPhase = 6.2831853f * (400f * t + 450f * t * t)
+                sin(sweepPhase) * 0.35f * exp(-t * 3.5f) + sin(sweepPhase * 1.5f) * 0.12f * exp(-t * 4f)
+            }
         }
     }
 }

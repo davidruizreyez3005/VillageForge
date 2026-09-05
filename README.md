@@ -1,22 +1,28 @@
 # Village Forge
 
-A 3D idle-mining village game for Android, rendered with Google [Filament](https://github.com/google/filament). Tap to walk, mine ore, haul it back, sell it at the trading post, and upgrade your blacksmith.
+A 3D idle-mining village game for Android, rendered with Google [Filament](https://github.com/google/filament). Tap to walk, mine ore, smelt it in your furnace, forge goods at the anvil, sell at the trading post, and grow your workshop into a crystal-powered legend.
 
 ## Features
 
-- Full 3D valley with procedurally generated terrain, cliffs, trees, and rocks
-- Animated blacksmith character (walk, swing, idle bob) built from a 9-part procedural rig
-- Mining loop: copper, tin, coal, and iron rocks with HP, respawn timers, and pick-tier requirements
-- Economy: carry capacity, trading post selling, storage bin stockpiling
-- Upgrades: 6 pickaxe tiers (rusty → masterwork), boots speed levels, backpack capacity levels
-- Procedural sound effects via a raw AudioTrack synth (no audio assets needed)
-- Auto-saving to local JSON storage with atomic writes
-- Real-time shadows, PBR materials compiled at runtime through filamat
+- Full 3D valley **and a gated north canyon** with procedurally generated terrain, cliffs, pines, and a torch-lit canyon gate
+- **The Forge**: smelt ore into ingots in a queued furnace (it keeps pouring while you play or sleep), then hammer ingots into finished goods at the anvil
+- Mining loop: copper, tin, coal, and iron in the valley; **silver, gold, and crystal** in the canyon — each gated behind pick tiers
+- Economy: carry capacity, trading post (ore + ingots + goods), storage bin stockpiling
+- Upgrades: 7 pickaxe tiers (rusty → crystal), 7 boots levels, 6 backpack levels, storage bin, the forge itself
+- **Hired miners**: up to five hands that mine, haul to your stockpile, and keep earning offline
+- **Quest chain**: 12 objectives with coin rewards, plus a chronicle/stats screen
+- **Levels & XP** with level-up coin bonuses
+- **Day/night cycle**: warm dawns and dusks, torches and lanterns that light at night, a furnace fire that breathes
+- Animated blacksmith (walk, swing, idle bob) built from a 15-part procedural rig with hair, beard, boots, and a backpack that visibly fills with ore
+- Visual juice: rock debris on every strike, anvil sparks while crafting, chimney smoke while smelting, tap ripples
+- Title screen with rising embers and a loading flow
+- Procedural sound effects (mining, hammering, pouring, coins, fanfares) via a raw AudioTrack synth
+- Auto-saving to local JSON storage with atomic writes and v1 → v2 migration with offline progress
 
 ## Tech stack
 
 - Kotlin 2.0 + Jetpack Compose (HUD) over a Filament `SurfaceView`
-- Filament 1.51.6 (engine) + filamat (runtime material building)
+- Filament 1.51.6 (engine) + filamat (runtime material building, emissive materials)
 - kotlinx.serialization for save games
 - 10 Hz fixed-step simulation with render-side interpolation
 
@@ -27,7 +33,7 @@ The APK is built automatically by GitHub Actions on every push to `main`.
 1. Open the repository → **Actions** → **Build APK**
 2. Wait for the run to finish (a few minutes)
 3. Download the **village-forge-apk** artifact from the run page
-4. Unzip it and sideload `app-debug.apk` onto any Android 7.0+ device
+4. Unzip it and sideload `VillageForge-v2.0.apk` onto any Android 7.0+ device
 
 To build locally:
 
@@ -40,22 +46,26 @@ gradle assembleDebug   # requires JDK 17 and the Android SDK (API 34)
 
 ```
 app/src/main/kotlin/com/villageforge/
-├── MainActivity.kt          # composition root + 10 Hz sim loop
-├── config/GameConfig.kt     # tuning tables: theme, ores, picks, world layout
-├── entities/Entities.kt     # player and rock entities
+├── MainActivity.kt          # composition root: title flow, sim loop, wiring
+├── config/GameConfig.kt     # tuning tables: theme, ores, metals, items, picks, world
+├── config/Quests.kt         # quest chain definitions
+├── entities/Entities.kt     # player, rocks, hired miner walkers
 ├── state/GameState.kt       # authoritative game state + UI snapshots
-├── core/Core.kt             # event bus, input handling, save manager
+├── core/Core.kt             # event bus, input (pan/zoom/orbit/taps), save manager
 ├── core/AudioManager.kt     # procedural AudioTrack synth
-├── graphics/Graphics.kt     # Filament host, camera rig, asset factory
-├── graphics/WorldRenderer.kt# scene assembly + player rig
-├── systems/Systems.kt       # mining, economy, buildings, upgrades
-└── ui/Hud.kt                # Compose HUD: shop, carry panel, floating text
+├── graphics/Graphics.kt     # Filament host, camera rig (orbit+pitch), asset factory
+├── graphics/Rigs.kt         # 15-part humanoid rig (player + miner styles)
+├── graphics/Effects.kt      # debris, sparks, smoke particles
+├── graphics/WorldRenderer.kt# scene assembly, forge visuals, day/night lighting
+├── systems/Systems.kt       # mining, economy, forge, crafting, miners, quests
+└── ui/                      # Compose HUD: title, top/bottom bars, sheets
 ```
 
 ## Controls
 
-- **Tap ground** — walk there
+- **Tap ground** — walk there (with a ripple marker)
 - **Tap a rock** — walk over and mine it
-- **Tap the trading post** — sell everything you're carrying
+- **Tap the trading post** — sell everything: ore, ingots, and goods
 - **Tap the storage bin** — deposit ore for later (buy it first)
-- **Drag / pinch** — pan and zoom the camera
+- **Tap the furnace** — open the forge sheet (smelt & craft)
+- **Drag** — pan · **Pinch** — zoom · **Two fingers rotate** — orbit the camera

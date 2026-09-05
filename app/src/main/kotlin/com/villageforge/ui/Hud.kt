@@ -3,6 +3,7 @@ package com.villageforge.ui
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -42,21 +43,32 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.villageforge.config.Buildings
+import com.villageforge.config.DayNight
 import com.villageforge.config.LightingProbe
 import com.villageforge.config.Ore
-import com.villageforge.config.Picks
-import com.villageforge.config.Upgrades
 import com.villageforge.core.EventBus
 import com.villageforge.core.InputManager
 import com.villageforge.core.SaveManager
+import com.villageforge.core.Sheet
 import com.villageforge.graphics.CameraRig
 import com.villageforge.graphics.FilamentHost
 import com.villageforge.state.GameState
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
 @Composable
-fun GameScreen(host: FilamentHost, input: InputManager, game: GameState, bus: EventBus, rig: CameraRig, save: SaveManager) {
+fun GameScreen(
+    host: FilamentHost,
+    input: InputManager,
+    game: GameState,
+    bus: EventBus,
+    rig: CameraRig,
+    save: SaveManager,
+    phase: UiPhase,
+    onPhaseChange: (UiPhase) -> Unit,
+    onReset: () -> Unit,
+) {
     Box(Modifier.fillMaxSize()) {
         AndroidView(
             modifier = Modifier.fillMaxSize(),
@@ -72,7 +84,23 @@ fun GameScreen(host: FilamentHost, input: InputManager, game: GameState, bus: Ev
                 }
             },
         )
-        HudScreen(game, bus, rig, save)
+        when (phase) {
+            UiPhase.TITLE -> TitleScreen(save.hasSave(), onPlay = { onPhaseChange(UiPhase.LOADING) }, onReset = onReset)
+            UiPhase.LOADING -> {
+                LoadingOverlay()
+                LaunchedEffect(host) {
+                    val startedAt = System.nanoTime()
+                    while (true) {
+                        val elapsedMs = (System.nanoTime() - startedAt) / 1_000_000
+                        if (host.firstFrameRendered.value && elapsedMs >= 500) break
+                        if (elapsedMs >= 8000) break
+                        delay(100)
+                    }
+                    onPhaseChange(UiPhase.GAME)
+                }
+            }
+            UiPhase.GAME -> HudScreen(game, bus, rig, save)
+        }
     }
 }
 
@@ -84,53 +112,81 @@ fun HudScreen(game: GameState, bus: EventBus, rig: CameraRig, save: SaveManager)
     val binOwned by game.binFlow.collectAsState()
     val upgrades by game.upgradeFlow.collectAsState()
     val soundOn by game.sfxFlow.collectAsState()
+    val ingots by game.ingotFlow.collectAsState()
+    val items by game.itemFlow.collectAsState()
+    val forge by game.forgeFlow.collectAsState()
+    val quest by game.questFlow.collectAsState()
+    val level by game.levelFlow.collectAsState()
+    val miners by game.minerFlow.collectAsState()
+    val time by game.timeFlow.collectAsState()
     val saveBroken by save.persistenceWarning.collectAsState()
 
-    var shopOpen by remember { mutableStateOf(false) }
+    var sheet by remember { mutableStateOf<Sheet?>(null) }
+    var offlineReport by remember { mutableStateOf(game.offlineReport) }
+
+    LaunchedEffect(bus) {
+        launch {
+            bus.uiRequest.collect { request -> sheet = request.sheet }
+        }
+    }
 
     Box(Modifier.fillMaxSize()) {
-        Column(
-            Modifier
-                .align(Alignment.TopStart)
-                .windowInsetsPadding(WindowInsets.safeDrawing)
-                .padding(12.dp)
-        ) {
-            CoinsPanel(coins)
-            Spacer(Modifier.height(8.dp))
-            SheetTab("Shop") { shopOpen = !shopOpen }
-        }
-        Box(
-            Modifier
-                .align(Alignment.TopEnd)
-                .windowInsetsPadding(WindowInsets.safeDrawing)
-                .padding(12.dp)
-                .background(Color(PANEL_COLOR), RoundedCornerShape(10.dp))
-                .clickable { game.enqueue(GameState.Command.ToggleSound) }
-                .padding(horizontal = 10.dp, vertical = 8.dp)
-        ) {
-            BasicText(if (soundOn) "🔊" else "🔇", style = TextStyle(fontSize = 15.sp))
-        }
+        TopBar(
+            modifier = Modifier.align(Alignment.TopStart),
+            coins = coins,
+            level = level,
+            time = time,
+            soundOn = soundOn,
+            onToggleSound = { game.enqueue(GameState.Command.ToggleSound) },
+        )
+
         if (saveBroken) {
             BasicText(
                 "Saves won't persist",
                 modifier = Modifier
                     .align(Alignment.TopCenter)
                     .windowInsetsPadding(WindowInsets.safeDrawing)
-                    .padding(top = 6.dp)
-                    .background(Color(WARN_BANNER_COLOR), RoundedCornerShape(6.dp))
+                    .padding(top = 56.dp)
+                    .background(Color(0xB3E2574C), RoundedCornerShape(6.dp))
                     .padding(horizontal = 10.dp, vertical = 4.dp),
-                style = TextStyle(color = Color(0xFFFFF3F0.toInt()), fontSize = 13.sp, fontWeight = FontWeight.Bold),
+                style = TextStyle(color = Color(0xFFFFF3F0), fontSize = 13.sp, fontWeight = FontWeight.Bold),
             )
         }
-        CarryPanel(carry, stock, binOwned, Modifier.align(Alignment.BottomStart))
-        if (!binOwned) {
+
+        CarryPanel(carry, stock, binOwned, ingots, items, Modifier.align(Alignment.BottomStart))
+
+        BottomBar(sheet != null, onSelect = { s -> sheet = if (sheet == s) null else s }, Modifier.align(Alignment.BottomCenter))
+
+        if (!binOwned && !forge.furnaceOwned) {
             BuyPanel("Storage Bin", Buildings.BIN_COST, coins,
                 { game.enqueue(GameState.Command.BuyBin) }, Modifier.align(Alignment.BottomEnd))
         }
-        if (shopOpen) {
-            Scrim { shopOpen = false }
-            ShopSheet(game, coins, upgrades, { shopOpen = false }, Modifier.align(Alignment.BottomCenter))
+
+        when (sheet) {
+            Sheet.SHOP -> ShopSheet(game, coins, binOwned, upgrades, miners, { sheet = null })
+            Sheet.FORGE -> ForgeSheet(game, coins, forge, ingots, items, carry, stock, { sheet = null })
+            Sheet.QUESTS -> QuestSheet(
+                quest,
+                StatsView(
+                    oreMined = game.stats.oresMined.sum(),
+                    coinsEarned = game.stats.coinsEarnedTotal,
+                    ingotsSmelted = game.stats.ingotsSmeltedTotal(),
+                    itemsCrafted = game.stats.itemsCraftedTotal(),
+                    minersHired = miners.count,
+                    playSeconds = game.stats.playSeconds.toInt(),
+                ),
+                { sheet = null },
+            )
+            null -> {}
         }
+
+        if (offlineReport != null) {
+            OfflineModal(offlineReport!!) {
+                game.offlineReport = null
+                offlineReport = null
+            }
+        }
+
         if (LightingProbe.ENABLED && LightingProbe.activeIndex.intValue >= 0) {
             val preset = LightingProbe.presets[LightingProbe.activeIndex.intValue]
             BasicText(
@@ -142,35 +198,136 @@ fun HudScreen(game: GameState, bus: EventBus, rig: CameraRig, save: SaveManager)
                 style = TextStyle(color = Color(0xFFF1C40F), fontSize = 20.sp, fontWeight = FontWeight.Bold),
             )
         }
+
         FloatingTexts(bus, rig)
+        TapRipples(bus)
     }
 }
 
+// ---- Top bar ---------------------------------------------------------------
+
 @Composable
-private fun CoinsPanel(coins: Int) {
+private fun TopBar(modifier: Modifier, coins: Int, level: GameState.LevelSnapshot, time: Float, soundOn: Boolean, onToggleSound: () -> Unit) {
     Row(
-        Modifier
-            .background(Color(PANEL_COLOR), RoundedCornerShape(10.dp))
-            .padding(horizontal = 12.dp, vertical = 8.dp),
+        modifier
+            .windowInsetsPadding(WindowInsets.safeDrawing)
+            .padding(12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(Modifier.size(11.dp).background(Color(COIN_COLOR), CircleShape))
-        Spacer(Modifier.width(7.dp))
-        BasicText("$coins c", style = TextStyle(color = Color(HEADER_COLOR), fontSize = 16.sp, fontWeight = FontWeight.Bold))
+        Row(
+            Modifier
+                .background(Color(UiColors.PANEL), RoundedCornerShape(10.dp))
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(Modifier.size(11.dp).background(Color(UiColors.COIN), CircleShape))
+            Spacer(Modifier.width(7.dp))
+            BasicText(
+                formatCount(coins),
+                style = TextStyle(color = Color(UiColors.HEADER), fontSize = 15.sp, fontWeight = FontWeight.Bold),
+            )
+        }
+        Spacer(Modifier.width(8.dp))
+        Column(
+            Modifier
+                .background(Color(UiColors.PANEL), RoundedCornerShape(10.dp))
+                .padding(horizontal = 12.dp, vertical = 6.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                BasicText(
+                    "Lv ${level.level}",
+                    style = TextStyle(color = Color(UiColors.XP), fontSize = 13.sp, fontWeight = FontWeight.Bold),
+                )
+                Spacer(Modifier.width(6.dp))
+                BasicText(
+                    "${level.xp}/${level.xpNeeded}",
+                    style = TextStyle(color = Color(UiColors.DIM), fontSize = 10.sp),
+                )
+            }
+            Spacer(Modifier.height(3.dp))
+            ProgressBar(
+                level.xp.toFloat() / level.xpNeeded.coerceAtLeast(1),
+                UiColors.XP,
+                Modifier.width(86.dp),
+            )
+        }
+        Spacer(Modifier.weight(1f))
+        TimeChip(time)
+        Spacer(Modifier.width(8.dp))
+        Box(
+            Modifier
+                .background(Color(UiColors.PANEL), RoundedCornerShape(10.dp))
+                .clickable { onToggleSound() }
+                .padding(horizontal = 10.dp, vertical = 8.dp)
+        ) {
+            BasicText(if (soundOn) "🔊" else "🔇", style = TextStyle(fontSize = 15.sp))
+        }
     }
 }
 
 @Composable
-private fun SheetTab(label: String, onClick: () -> Unit) {
-    Box(
+private fun TimeChip(t: Float) {
+    val (label, color) = dayPhase(t)
+    Row(
         Modifier
-            .background(Color(PANEL_COLOR), RoundedCornerShape(10.dp))
-            .clickable { onClick() }
-            .padding(horizontal = 16.dp, vertical = 8.dp)
+            .background(Color(UiColors.PANEL), RoundedCornerShape(10.dp))
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        BasicText(label, style = TextStyle(color = Color(HEADER_COLOR), fontSize = 14.sp, fontWeight = FontWeight.Bold))
+        Box(Modifier.size(9.dp).background(Color(color), CircleShape))
+        Spacer(Modifier.width(6.dp))
+        BasicText(label, style = TextStyle(color = Color(UiColors.TEXT), fontSize = 13.sp, fontWeight = FontWeight.Bold))
     }
 }
+
+private fun dayPhase(t: Float): Pair<String, Int> = when {
+    t < DayNight.DAWN_END -> "Dawn" to 0xFFF5B041.toInt()
+    t < DayNight.DAY_END -> "Day" to 0xFF7DC8E8.toInt()
+    t < DayNight.DUSK_END -> "Dusk" to 0xFFE8735A.toInt()
+    else -> "Night" to 0xFF8FA0C8.toInt()
+}
+
+private fun formatCount(value: Int): String = when {
+    value >= 1_000_000 -> "${value / 1_000_000}.${(value % 1_000_000) / 100_000}M c"
+    value >= 10_000 -> "${value / 1000}k c"
+    else -> "$value c"
+}
+
+// ---- Bottom action bar -------------------------------------------------------
+
+@Composable
+private fun BottomBar(anyOpen: Boolean, onSelect: (Sheet) -> Unit, modifier: Modifier) {
+    Row(
+        modifier
+            .windowInsetsPadding(WindowInsets.safeDrawing)
+            .padding(bottom = 10.dp),
+    ) {
+        BarButton("🔨", "Forge", anyOpen) { onSelect(Sheet.FORGE) }
+        Spacer(Modifier.width(8.dp))
+        BarButton("🛒", "Shop", anyOpen) { onSelect(Sheet.SHOP) }
+        Spacer(Modifier.width(8.dp))
+        BarButton("📜", "Quests", anyOpen) { onSelect(Sheet.QUESTS) }
+    }
+}
+
+@Composable
+private fun BarButton(glyph: String, label: String, dim: Boolean, onClick: () -> Unit) {
+    Column(
+        Modifier
+            .background(Color(if (dim) UiColors.PANEL else UiColors.PANEL_RAISED), RoundedCornerShape(12.dp))
+            .clickable { onClick() }
+            .padding(horizontal = 18.dp, vertical = 8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        BasicText(glyph, style = TextStyle(fontSize = 18.sp))
+        BasicText(
+            label,
+            style = TextStyle(color = Color(UiColors.HEADER), fontSize = 12.sp, fontWeight = FontWeight.Bold),
+        )
+    }
+}
+
+// ---- Carry panel ---------------------------------------------------------
 
 @Composable
 private fun BuyPanel(label: String, cost: Int, coins: Int, onBuy: () -> Unit, modifier: Modifier) {
@@ -179,132 +336,18 @@ private fun BuyPanel(label: String, cost: Int, coins: Int, onBuy: () -> Unit, mo
         modifier
             .windowInsetsPadding(WindowInsets.safeDrawing)
             .padding(12.dp)
-            .background(Color(PANEL_COLOR), RoundedCornerShape(10.dp))
+            .background(Color(UiColors.PANEL), RoundedCornerShape(10.dp))
             .clickable(enabled = affordable) { onBuy() }
             .padding(horizontal = 14.dp, vertical = 8.dp)
     ) {
         Column {
-            BasicText(label, style = TextStyle(color = Color(HEADER_COLOR), fontSize = 15.sp, fontWeight = FontWeight.Bold))
+            BasicText(label, style = TextStyle(color = Color(UiColors.HEADER), fontSize = 15.sp, fontWeight = FontWeight.Bold))
             BasicText(
                 if (affordable) "Buy · ${cost} c" else "Need ${cost} c",
-                style = TextStyle(color = Color(if (affordable) COIN_TEXT_COLOR else DIM_COLOR), fontSize = 13.sp),
+                style = TextStyle(color = Color(if (affordable) UiColors.COIN_TEXT else UiColors.DIM), fontSize = 13.sp),
             )
         }
     }
-}
-
-@Composable
-private fun Scrim(onClose: () -> Unit) {
-    Box(
-        Modifier
-            .fillMaxSize()
-            .background(Color(SCRIM_COLOR))
-            .clickable { onClose() }
-    )
-}
-
-@Composable
-private fun CloseCorner(onClose: () -> Unit) {
-    Box(
-        Modifier
-            .background(Color(PANEL_RAISED), RoundedCornerShape(8.dp))
-            .clickable { onClose() }
-            .padding(horizontal = 12.dp, vertical = 6.dp)
-    ) {
-        BasicText("✕", style = TextStyle(color = Color(TEXT_COLOR), fontSize = 15.sp, fontWeight = FontWeight.Bold))
-    }
-}
-
-@Composable
-private fun ShopSheet(
-    game: GameState,
-    coins: Int,
-    upgrades: GameState.UpgradeSnapshot,
-    onClose: () -> Unit,
-    modifier: Modifier,
-) {
-    Column(
-        modifier
-            .fillMaxWidth()
-            .background(Color(PANEL_COLOR), RoundedCornerShape(topStart = 14.dp, topEnd = 14.dp))
-            .clickable { }
-            .padding(16.dp)
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            BasicText("Upgrades", style = TextStyle(color = Color(HEADER_COLOR), fontSize = 18.sp, fontWeight = FontWeight.Bold))
-            Spacer(Modifier.weight(1f))
-            CloseCorner(onClose)
-        }
-        Spacer(Modifier.height(10.dp))
-
-        val pick = Picks.entries[upgrades.pickTier]
-        val nextPick = Picks.entries.getOrNull(upgrades.pickTier + 1)
-        UpgradeRow(
-            title = "Pickaxe — ${pick.label}",
-            detail = if (nextPick == null) "Max tier · ${pick.damage} damage/swing"
-            else "Next: ${nextPick.label} · ${nextPick.damage} dmg/swing" +
-                if (nextPick.doubleOreChance > 0f) " · +${(nextPick.doubleOreChance * 100).toInt()}% double ore" else "",
-            buyLabel = nextPick?.let { "${it.cost} c" },
-            canBuy = nextPick != null && coins >= nextPick.cost,
-            onBuy = { game.enqueue(GameState.Command.BuyPick) },
-        )
-        UpgradeDivider()
-
-        val bootsMax = upgrades.bootsLevel >= Upgrades.BOOTS_COSTS.size
-        UpgradeRow(
-            title = "Boots — Lv ${upgrades.bootsLevel}/${Upgrades.BOOTS_COSTS.size}",
-            detail = if (bootsMax) "Max · ${Upgrades.moveSpeed(upgrades.bootsLevel)} speed"
-            else "Speed ${Upgrades.moveSpeed(upgrades.bootsLevel)} → ${Upgrades.moveSpeed(upgrades.bootsLevel + 1)}",
-            buyLabel = if (bootsMax) null else "${Upgrades.BOOTS_COSTS[upgrades.bootsLevel]} c",
-            canBuy = !bootsMax && coins >= Upgrades.BOOTS_COSTS[upgrades.bootsLevel],
-            onBuy = { game.enqueue(GameState.Command.BuyBoots) },
-        )
-        UpgradeDivider()
-
-        val packMax = upgrades.backpackLevel >= Upgrades.BACKPACK_COSTS.size
-        UpgradeRow(
-            title = "Backpack — Lv ${upgrades.backpackLevel}/${Upgrades.BACKPACK_COSTS.size}",
-            detail = if (packMax) "Max · carries ${Upgrades.BACKPACK_CAPACITIES[upgrades.backpackLevel]}"
-            else "Carries ${Upgrades.BACKPACK_CAPACITIES[upgrades.backpackLevel]} → ${Upgrades.BACKPACK_CAPACITIES[upgrades.backpackLevel + 1]}",
-            buyLabel = if (packMax) null else "${Upgrades.BACKPACK_COSTS[upgrades.backpackLevel]} c",
-            canBuy = !packMax && coins >= Upgrades.BACKPACK_COSTS[upgrades.backpackLevel],
-            onBuy = { game.enqueue(GameState.Command.BuyBackpack) },
-        )
-    }
-}
-
-@Composable
-private fun UpgradeRow(title: String, detail: String, buyLabel: String?, canBuy: Boolean, onBuy: () -> Unit) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Column(Modifier.weight(1f)) {
-            BasicText(title, style = TextStyle(color = Color(HEADER_COLOR), fontSize = 15.sp, fontWeight = FontWeight.Bold))
-            BasicText(detail, style = TextStyle(color = Color(TEXT_COLOR), fontSize = 12.sp))
-        }
-        if (buyLabel != null) {
-            Spacer(Modifier.width(10.dp))
-            Box(
-                Modifier
-                    .background(Color(if (canBuy) CHIP_BG else CHIP_DISABLED), RoundedCornerShape(8.dp))
-                    .clickable(enabled = canBuy) { onBuy() }
-                    .padding(horizontal = 14.dp, vertical = 8.dp)
-            ) {
-                BasicText(
-                    buyLabel,
-                    style = TextStyle(
-                        color = Color(if (canBuy) HEADER_COLOR else DIM_COLOR),
-                        fontSize = 13.sp, fontWeight = FontWeight.Bold,
-                    ),
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun UpgradeDivider() {
-    Spacer(Modifier.height(10.dp))
-    Box(Modifier.fillMaxWidth().height(1.dp).background(Color(DIVIDER_COLOR)))
-    Spacer(Modifier.height(10.dp))
 }
 
 @Composable
@@ -312,24 +355,46 @@ private fun CarryPanel(
     carry: GameState.CarrySnapshot,
     stock: GameState.StockpileSnapshot,
     binOwned: Boolean,
+    ingots: GameState.IngotSnapshot,
+    items: GameState.ItemSnapshot,
     modifier: Modifier,
 ) {
     Column(
         modifier
             .windowInsetsPadding(WindowInsets.safeDrawing)
             .padding(12.dp)
-            .background(Color(PANEL_COLOR), RoundedCornerShape(10.dp))
+            .background(Color(UiColors.PANEL), RoundedCornerShape(10.dp))
             .padding(horizontal = 12.dp, vertical = 10.dp)
     ) {
         BasicText(
             "Carrying ${carry.total}/${carry.capacity}",
-            style = TextStyle(color = Color(HEADER_COLOR), fontSize = 15.sp, fontWeight = FontWeight.Bold),
+            style = TextStyle(color = Color(UiColors.HEADER), fontSize = 14.sp, fontWeight = FontWeight.Bold),
         )
+        Spacer(Modifier.height(4.dp))
+        ProgressBar(carry.total.toFloat() / carry.capacity.coerceAtLeast(1), UiColors.COIN)
+        Spacer(Modifier.height(6.dp))
         OreRows(carry.oreCounts)
+        if (ingots.total > 0 || items.total > 0) {
+            Spacer(Modifier.height(5.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                BasicText(
+                    "Ingots ×${ingots.total}",
+                    style = TextStyle(color = Color(UiColors.COIN_TEXT), fontSize = 12.sp, fontWeight = FontWeight.Bold),
+                )
+                Spacer(Modifier.width(10.dp))
+                BasicText(
+                    "Goods ×${items.total}",
+                    style = TextStyle(color = Color(UiColors.EMBER), fontSize = 12.sp, fontWeight = FontWeight.Bold),
+                )
+            }
+        }
         if (binOwned) {
-            Spacer(Modifier.height(7.dp))
-            BasicText("Stockpile", style = TextStyle(color = Color(HEADER_COLOR), fontSize = 13.sp, fontWeight = FontWeight.Bold))
-            OreRows(stock.oreCounts)
+            Spacer(Modifier.height(6.dp))
+            BasicText(
+                "Stockpile ${stock.total}",
+                style = TextStyle(color = Color(UiColors.HEADER), fontSize = 12.sp, fontWeight = FontWeight.Bold),
+            )
+            StockOreRows(stock.oreCounts)
         }
     }
 }
@@ -338,19 +403,38 @@ private fun CarryPanel(
 private fun OreRows(counts: List<Int>) {
     for (ore in Ore.entries) {
         val count = counts[ore.ordinal]
-        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 3.dp)) {
-            Box(Modifier.size(9.dp).background(Color(oreColor(ore)), CircleShape))
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 2.dp)) {
+            Box(Modifier.size(8.dp).background(Color(oreColor(ore)), CircleShape))
             Spacer(Modifier.width(6.dp))
             BasicText(
                 "${oreName(ore)} ×$count",
                 style = TextStyle(
-                    color = if (count > 0) Color(TEXT_COLOR) else Color(DIM_COLOR),
-                    fontSize = 13.sp,
+                    color = if (count > 0) Color(UiColors.TEXT) else Color(UiColors.DIM),
+                    fontSize = 12.sp,
                 ),
             )
         }
     }
 }
+
+@Composable
+private fun StockOreRows(counts: List<Int>) {
+    // Only rows that actually hold something — the full list lives in the HUD already.
+    for (ore in Ore.entries) {
+        val count = counts[ore.ordinal]
+        if (count <= 0) continue
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 2.dp)) {
+            Box(Modifier.size(8.dp).background(Color(oreColor(ore)), CircleShape))
+            Spacer(Modifier.width(6.dp))
+            BasicText(
+                "${oreName(ore)} ×$count",
+                style = TextStyle(color = Color(UiColors.TEXT), fontSize = 12.sp),
+            )
+        }
+    }
+}
+
+// ---- Floating combat text --------------------------------------------------
 
 @Composable
 private fun FloatingTexts(bus: EventBus, rig: CameraRig) {
@@ -361,13 +445,13 @@ private fun FloatingTexts(bus: EventBus, rig: CameraRig) {
         launch {
             bus.oreMined.collect { event ->
                 val screen = rig.projectToScreen(event.x, event.z)
-                addFloating(items, FloatingItem(nextId[0]++, "+${event.amount} ${oreName(event.ore)}", oreColor(event.ore), screen[0], screen[1]))
+                addFloating(items, FloatingItem(nextId[0]++, "+${event.amount} ${oreName(event.ore)}", oreColor(event.ore), screen[0], screen[1], 0f))
             }
         }
         launch {
             bus.notices.collect { event ->
                 val screen = rig.projectToScreen(event.x, event.z)
-                addFloating(items, FloatingItem(nextId[0]++, event.text, event.colorArgb, screen[0], screen[1]))
+                addFloating(items, FloatingItem(nextId[0]++, event.text, event.colorArgb, screen[0], screen[1], event.yOffset))
             }
         }
     }
@@ -393,7 +477,7 @@ private fun FloatingText(item: FloatingItem, onExpired: () -> Unit) {
             .offset {
                 IntOffset(
                     (item.x - 30.dp.toPx()).roundToInt(),
-                    (item.y - 18.dp.toPx() - (1f - life.coerceIn(0f, 1f)) * 64.dp.toPx()).roundToInt(),
+                    (item.y - 18.dp.toPx() - item.yOffsetDp.dp.toPx() - (1f - life.coerceIn(0f, 1f)) * 64.dp.toPx()).roundToInt(),
                 )
             },
         style = TextStyle(color = Color(item.colorArgb), fontSize = 15.sp, fontWeight = FontWeight.Bold),
@@ -406,28 +490,53 @@ private fun addFloating(items: MutableList<FloatingItem>, item: FloatingItem) {
 }
 
 private data class FloatingItem(
-    val id: Long, val text: String, val colorArgb: Int, val x: Float, val y: Float,
+    val id: Long, val text: String, val colorArgb: Int, val x: Float, val y: Float, val yOffsetDp: Float,
 )
 
-private fun oreName(ore: Ore) = ore.name.lowercase().replaceFirstChar { it.uppercase() }
+// ---- Tap ripple --------------------------------------------------------------
 
-private fun oreColor(ore: Ore): Int = when (ore) {
-    Ore.COPPER -> 0xFFE0955C.toInt()
-    Ore.TIN -> 0xFFD7DEE6.toInt()
-    Ore.COAL -> 0xFFA8ADB3.toInt()
-    Ore.IRON -> 0xFFB7C1D4.toInt()
+@Composable
+private fun TapRipples(bus: EventBus) {
+    val items = remember { mutableStateListOf<RippleItem>() }
+    val nextId = remember { longArrayOf(0L) }
+
+    LaunchedEffect(bus) {
+        launch {
+            bus.tapMarker.collect { marker ->
+                if (items.size >= 4) items.removeAt(0)
+                items.add(RippleItem(nextId[0]++, marker.x, marker.y))
+            }
+        }
+    }
+    items.forEach { item -> Ripple(item) { items.removeAll { it.id == item.id } } }
 }
 
+@Composable
+private fun Ripple(item: RippleItem, onExpired: () -> Unit) {
+    var life by remember(item.id) { mutableFloatStateOf(1f) }
+    LaunchedEffect(item.id) {
+        val start = withFrameNanos { it }
+        while (life > 0f) {
+            val now = withFrameNanos { it }
+            life = 1f - (now - start) / RIPPLE_LIFETIME_NANOS
+        }
+        onExpired()
+    }
+    val t = life.coerceIn(0f, 1f)
+    Box(
+        Modifier
+            .offset { IntOffset((item.x - 14.dp.toPx()).roundToInt(), (item.y - 14.dp.toPx()).roundToInt()) }
+            .graphicsLayer {
+                alpha = t
+                scaleX = 1f + (1f - t) * 2.2f
+                scaleY = 1f + (1f - t) * 2.2f
+            }
+            .size(28.dp)
+            .border(2.dp, Color(UiColors.EMBER), CircleShape)
+    )
+}
+
+private data class RippleItem(val id: Long, val x: Float, val y: Float)
+
 private const val FLOAT_LIFETIME_NANOS = 900_000_000L
-private val PANEL_COLOR = 0xCC26201A.toInt()
-private val PANEL_RAISED = 0xFF33291F.toInt()
-private val WARN_BANNER_COLOR = 0xB3E2574C.toInt()
-private val HEADER_COLOR = 0xFFF0E6D2.toInt()
-private val TEXT_COLOR = 0xFFD8CDB8.toInt()
-private val DIM_COLOR = 0xFF706958.toInt()
-private val COIN_COLOR = 0xFFF1C40F.toInt()
-private val COIN_TEXT_COLOR = 0xFFF5D76E.toInt()
-private val SCRIM_COLOR = 0x88000000.toInt()
-private val CHIP_BG = 0xFF5A4632.toInt()
-private val CHIP_DISABLED = 0xFF3A3028.toInt()
-private val DIVIDER_COLOR = 0xFF453830.toInt()
+private const val RIPPLE_LIFETIME_NANOS = 450_000_000L

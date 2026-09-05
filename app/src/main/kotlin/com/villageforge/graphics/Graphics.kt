@@ -13,6 +13,7 @@ import kotlin.math.cos
 import kotlin.math.exp
 import kotlin.math.sin
 import kotlin.math.sqrt
+import kotlinx.coroutines.flow.MutableStateFlow
 
 object Transforms {
     fun trs(tx: Float, ty: Float, tz: Float, sx: Float, sy: Float, sz: Float, yawDegrees: Float = 0f): FloatArray {
@@ -28,11 +29,13 @@ object Transforms {
         out[8]=s*sz; out[9]=0f; out[10]=c*sz; out[11]=0f
         out[12]=tx; out[13]=ty; out[14]=tz; out[15]=1f
     }
-    fun rootInto(out: FloatArray, tx: Float, ty: Float, tz: Float, yawRadians: Float) {
+    fun rootInto(out: FloatArray, tx: Float, ty: Float, tz: Float, yawRadians: Float, pitchRadians: Float = 0f) {
         val c = cos(yawRadians); val s = sin(yawRadians)
-        out[0]=c; out[1]=0f; out[2]=-s; out[3]=0f
-        out[4]=0f; out[5]=1f; out[6]=0f; out[7]=0f
-        out[8]=s; out[9]=0f; out[10]=c; out[11]=0f
+        val cp = cos(pitchRadians); val sp = sin(pitchRadians)
+        // rotY(yaw) * rotX(pitch) — pitch leans the whole rig forward/back.
+        out[0]=c;    out[1]=0f; out[2]=-s;   out[3]=0f
+        out[4]=s*sp; out[5]=cp; out[6]=c*sp; out[7]=0f
+        out[8]=s*cp; out[9]=-sp; out[10]=c*cp; out[11]=0f
         out[12]=tx; out[13]=ty; out[14]=tz; out[15]=1f
     }
     fun translation(out: FloatArray, tx: Float, ty: Float, tz: Float) {
@@ -66,6 +69,7 @@ class AssetFactory(private val engine: Engine) {
     private val materialInstances = ArrayList<MaterialInstance>()
     private val meshes = ArrayList<Mesh>()
     private var litMaterial: Material? = null
+    private var smokeMaterial: Material? = null
 
     init { MaterialBuilder.init() }
 
@@ -85,13 +89,16 @@ class AssetFactory(private val engine: Engine) {
                 .uniformParameter(MaterialBuilder.UniformType.FLOAT3, "baseColor")
                 .uniformParameter(MaterialBuilder.UniformType.FLOAT, "roughness")
                 .uniformParameter(MaterialBuilder.UniformType.FLOAT, "metallic")
+                .uniformParameter(MaterialBuilder.UniformType.FLOAT3, "emissiveColor")
+                .uniformParameter(MaterialBuilder.UniformType.FLOAT, "emissiveStrength")
                 .material(
                     "void material(inout MaterialInputs material) {\n" +
-                    "    prepareMaterial(material);\n" +
-                    "    material.baseColor = float4(materialParams.baseColor, 1.0);\n" +
-                    "    material.roughness = materialParams.roughness;\n" +
-                    "    material.metallic = materialParams.metallic;\n" +
-                    "}\n"
+                        "    prepareMaterial(material);\n" +
+                        "    material.baseColor = float4(materialParams.baseColor, 1.0);\n" +
+                        "    material.roughness = materialParams.roughness;\n" +
+                        "    material.metallic = materialParams.metallic;\n" +
+                        "    material.emissive = float4(materialParams.emissiveColor * materialParams.emissiveStrength, 1.0);\n" +
+                        "}\n"
                 )
                 .build(engine)
             check(pkg.isValid) { "vf_lit material package failed to compile" }
@@ -102,11 +109,54 @@ class AssetFactory(private val engine: Engine) {
         return litMaterial!!
     }
 
-    fun material(color: Theme.Rgb, roughness: Float, metallic: Float = Theme.METALLIC_DEFAULT): MaterialInstance {
+    private fun smokeMaterialDef(): Material {
+        if (smokeMaterial == null) {
+            val pkg = MaterialBuilder()
+                .name("vf_smoke")
+                .platform(MaterialBuilder.Platform.MOBILE)
+                .shading(MaterialBuilder.Shading.UNLIT)
+                .materialDomain(MaterialBuilder.MaterialDomain.SURFACE)
+                .blending(MaterialBuilder.BlendingMode.TRANSPARENT)
+                .culling(MaterialBuilder.CullingMode.BACK)
+                .depthWrite(false)
+                .uniformParameter(MaterialBuilder.UniformType.FLOAT4, "baseColor")
+                .material(
+                    "void material(inout MaterialInputs material) {\n" +
+                        "    prepareMaterial(material);\n" +
+                        "    material.baseColor = materialParams.baseColor;\n" +
+                        "}\n"
+                )
+                .build(engine)
+            check(pkg.isValid) { "vf_smoke material package failed to compile" }
+            smokeMaterial = Material.Builder()
+                .payload(pkg.buffer, pkg.buffer.remaining())
+                .build(engine)
+        }
+        return smokeMaterial!!
+    }
+
+    fun material(
+        color: Theme.Rgb,
+        roughness: Float,
+        metallic: Float = Theme.METALLIC_DEFAULT,
+        emissive: Theme.Rgb? = null,
+        emissiveStrength: Float = 0f,
+    ): MaterialInstance {
         val instance = litMaterialDef().createInstance()
         instance.setParameter("baseColor", color.r, color.g, color.b)
         instance.setParameter("roughness", roughness)
         instance.setParameter("metallic", metallic)
+        val e = emissive ?: color
+        instance.setParameter("emissiveColor", e.r, e.g, e.b)
+        instance.setParameter("emissiveStrength", emissiveStrength)
+        materialInstances.add(instance)
+        return instance
+    }
+
+    /** Unlit translucent material for furnace smoke puffs (alpha animated per instance). */
+    fun smokeInstance(): MaterialInstance {
+        val instance = smokeMaterialDef().createInstance()
+        instance.setParameter("baseColor", Theme.SMOKE.r, Theme.SMOKE.g, Theme.SMOKE.b, 0.5f)
         materialInstances.add(instance)
         return instance
     }
@@ -128,7 +178,7 @@ class AssetFactory(private val engine: Engine) {
     }
 
     val box: Mesh by lazy { buildBox() }
-    val rockVariants: List<Mesh> by lazy { (0 until 4).map { buildRock(it) } }
+    val rockVariants: List<Mesh> by lazy { (0 until 6).map { buildRock(it) } }
     val terrainParts: List<Mesh> by lazy { buildTerrain() }
 
     private fun buildBox(): Mesh {
@@ -153,8 +203,8 @@ class AssetFactory(private val engine: Engine) {
     }
 
     private fun buildRock(seed: Int): Mesh {
-        val n = 3
-        val positions = ArrayList<Float>(216); val normals = ArrayList<Float>(216); val indices = ArrayList<Int>(144)
+        val n = 4
+        val positions = ArrayList<Float>(384); val normals = ArrayList<Float>(384); val indices = ArrayList<Int>(256)
         val faces = arrayOf(
             arrayOf(floatArrayOf(-1f,1f,1f), floatArrayOf(1f,1f,1f), floatArrayOf(1f,1f,-1f), floatArrayOf(-1f,1f,-1f)),
             arrayOf(floatArrayOf(-1f,-1f,1f), floatArrayOf(1f,-1f,1f), floatArrayOf(1f,1f,1f), floatArrayOf(-1f,1f,1f)),
@@ -196,36 +246,52 @@ class AssetFactory(private val engine: Engine) {
     }
 
     private fun buildTerrain(): List<Mesh> {
-        val cell = 2f
-        val nx = (WorldLayout.VALLEY_WIDTH/cell).toInt()+1
-        val nz = (WorldLayout.VALLEY_DEPTH/cell).toInt()+1
-        val x0 = -WorldLayout.VALLEY_WIDTH/2f; val z0 = -WorldLayout.VALLEY_DEPTH/2f
-        val heights = FloatArray(nx*nz); val positions = FloatArray(nx*nz*3)
+        val cell = WorldLayout.TERRAIN_CELL
+        val x0 = -WorldLayout.VALLEY_WIDTH / 2f
+        val x1 = WorldLayout.VALLEY_WIDTH / 2f
+        val z0 = WorldLayout.CANYON_Z_MIN - 1.5f
+        val z1 = WorldLayout.VALLEY_Z_MAX
+        val nx = ((x1 - x0) / cell).toInt() + 1
+        val nz = ((z1 - z0) / cell).toInt() + 1
+        val heights = FloatArray(nx * nz); val positions = FloatArray(nx * nz * 3)
         for (j in 0 until nz) for (i in 0 until nx) {
-            val x=x0+i*cell; val z=z0+j*cell; val h=WorldLayout.groundHeight(x,z); val v=j*nx+i
-            heights[v]=h; positions[v*3]=x; positions[v*3+1]=h; positions[v*3+2]=z
+            val x = x0 + i * cell; val z = z0 + j * cell; val h = WorldLayout.groundHeight(x, z); val v = j * nx + i
+            heights[v] = h; positions[v * 3] = x; positions[v * 3 + 1] = h; positions[v * 3 + 2] = z
         }
-        val normals = FloatArray(nx*nz*3)
-        fun heightAt(i: Int, j: Int): Float = heights[j.coerceIn(0,nz-1)*nx+i.coerceIn(0,nx-1)]
+        val normals = FloatArray(nx * nz * 3)
+        fun heightAt(i: Int, j: Int): Float = heights[j.coerceIn(0, nz - 1) * nx + i.coerceIn(0, nx - 1)]
         for (j in 0 until nz) for (i in 0 until nx) {
-            val v=j*nx+i
-            val dx=(heightAt(i+1,j)-heightAt(i-1,j))/(2f*cell)
-            val dz=(heightAt(i,j+1)-heightAt(i,j-1))/(2f*cell)
-            val inv=1f/sqrt(dx*dx+1f+dz*dz)
-            normals[v*3]=-dx*inv; normals[v*3+1]=inv; normals[v*3+2]=-dz*inv
+            val v = j * nx + i
+            val dx = (heightAt(i + 1, j) - heightAt(i - 1, j)) / (2f * cell)
+            val dz = (heightAt(i, j + 1) - heightAt(i, j - 1)) / (2f * cell)
+            val inv = 1f / sqrt(dx * dx + 1f + dz * dz)
+            normals[v * 3] = -dx * inv; normals[v * 3 + 1] = inv; normals[v * 3 + 2] = -dz * inv
         }
-        val variantCount = Theme.GRASS.size
-        val variantIndices = Array(variantCount) { ArrayList<Int>() }
-        for (j in 0 until nz-1) for (i in 0 until nx-1) {
-            val v00=j*nx+i; val v01=(j+1)*nx+i; val v11=v01+1; val v10=v00+1
-            val variant=(WorldLayout.hash01(i,j,7.3f)*variantCount).toInt().coerceAtMost(variantCount-1)
-            val idx = variantIndices[variant]
-            idx.add(v00); idx.add(v01); idx.add(v11); idx.add(v00); idx.add(v11); idx.add(v10)
+        val valleyCount = Theme.GRASS.size
+        val canyonCount = Theme.CANYON_GRASS.size
+        val variantIndices = Array(valleyCount + canyonCount) { ArrayList<Int>() }
+        for (j in 0 until nz - 1) for (i in 0 until nx - 1) {
+            val v00 = j * nx + i; val v01 = (j + 1) * nx + i; val v11 = v01 + 1; val v10 = v00 + 1
+            val cx = x0 + (i + 0.5f) * cell
+            val cz = z0 + (j + 0.5f) * cell
+            if (WorldLayout.inCanyonZone(cx, cz)) {
+                val variant = (WorldLayout.hash01(i, j, 8.9f) * canyonCount).toInt().coerceAtMost(canyonCount - 1)
+                val idx = variantIndices[valleyCount + variant]
+                idx.add(v00); idx.add(v01); idx.add(v11); idx.add(v00); idx.add(v11); idx.add(v10)
+            } else {
+                val variant = (WorldLayout.hash01(i, j, 7.3f) * valleyCount).toInt().coerceAtMost(valleyCount - 1)
+                val idx = variantIndices[variant]
+                idx.add(v00); idx.add(v01); idx.add(v11); idx.add(v00); idx.add(v11); idx.add(v10)
+            }
         }
         val vb = newVertexBuffer(positions, normals)
-        return Theme.GRASS.indices.map { t ->
-            registerMesh(vb, newIndexBuffer(variantIndices[t]), variantIndices[t].size,
-                Box(floatArrayOf(0f,1.5f,0f), floatArrayOf(WorldLayout.VALLEY_WIDTH/2f+1f,4f,WorldLayout.VALLEY_DEPTH/2f+1f)))
+        // The bounds must cover the whole strip down to the canyon floor.
+        val bounds = Box(
+            floatArrayOf(0f, 1.5f, (z0 + z1) / 2f),
+            floatArrayOf(WorldLayout.VALLEY_WIDTH / 2f + 2f, 8f, (z1 - z0) / 2f + 2f),
+        )
+        return variantIndices.map { idx ->
+            registerMesh(vb, newIndexBuffer(idx), idx.size, bounds)
         }
     }
 
@@ -292,10 +358,15 @@ class AssetFactory(private val engine: Engine) {
         for (entity in entities) { scene.removeEntity(entity); engine.destroyEntity(entity) }
         for (instance in materialInstances) engine.destroyMaterialInstance(instance)
         litMaterial?.let { engine.destroyMaterial(it) }
+        smokeMaterial?.let { engine.destroyMaterial(it) }
         for (mesh in meshes) { engine.destroyVertexBuffer(mesh.vertexBuffer); engine.destroyIndexBuffer(mesh.indexBuffer) }
     }
 }
 
+/**
+ * Orthographic orbit camera: pan, pinch zoom, and a two-finger yaw orbit.
+ * Pitch is tied to zoom (closer = steeper view) for a nicer framing feel.
+ */
 class CameraRig(private val engine: Engine) {
     val camera: Camera
     private val cameraEntity: Int = EntityManager.get().create()
@@ -303,8 +374,12 @@ class CameraRig(private val engine: Engine) {
     private var focusZ = WorldLayout.SPAWN_Z
     private var targetFocusX = focusX
     private var targetFocusZ = focusZ
-    private var zoom = 16f
+    private var zoom = 15f
     private var targetZoom = zoom
+    private var yaw = Math.toRadians(Theme.CAMERA_YAW_DEGREES.toDouble()).toFloat()
+    private var targetYaw = yaw
+    private var pitch = Math.toRadians(Theme.CAMERA_PITCH_DEGREES.toDouble()).toFloat()
+    private var targetPitch = pitch
     private var viewportWidth = 1
     private var viewportHeight = 1
 
@@ -320,11 +395,14 @@ class CameraRig(private val engine: Engine) {
         camera.setExposure(aperture, shutter, iso)
     }
 
+    fun setExposure(aperture: Float, shutter: Float, iso: Float) {
+        camera.setExposure(aperture, shutter, iso)
+    }
+
     fun panByPixels(dxPx: Float, dyPx: Float) {
         val worldPerPixel = 2f*zoom/viewportHeight
         val dx = dxPx*worldPerPixel; val dy = dyPx*worldPerPixel
-        val yawRad = Math.toRadians(Theme.CAMERA_YAW_DEGREES.toDouble())
-        val s = sin(yawRad).toFloat(); val c = cos(yawRad).toFloat()
+        val s = sin(yaw); val c = cos(yaw)
         // Grab-style panning (Google-Maps convention): the world follows the
         // finger. Screen-up on the ground is (-s, -c), screen-right is (c, -s);
         // the focus moves OPPOSITE to the finger on both screen axes.
@@ -333,24 +411,33 @@ class CameraRig(private val engine: Engine) {
         clampFocus()
     }
 
+    /** Two-finger orbit: positive degrees = clockwise on screen. */
+    fun rotateBy(deltaDegrees: Float) {
+        targetYaw += Math.toRadians(deltaDegrees.toDouble()).toFloat()
+    }
+
     /** Pinch-out (factor > 1) must zoom IN, i.e. shrink the visible world span. */
-    fun zoomBy(factor: Float) { targetZoom = (targetZoom / factor).coerceIn(9f, 34f) }
+    fun zoomBy(factor: Float) { targetZoom = (targetZoom / factor).coerceIn(8f, 36f) }
 
     fun update(dt: Float) {
         val panLerp = 1f - exp(-12f*dt)
         val zoomLerp = 1f - exp(-10f*dt)
+        val yawLerp = 1f - exp(-9f*dt)
         focusX += (targetFocusX-focusX)*panLerp
         focusZ += (targetFocusZ-focusZ)*panLerp
         zoom += (targetZoom-zoom)*zoomLerp
+        yaw += (targetYaw-yaw)*yawLerp
+        // Closer view = higher pitch angle (more top-down).
+        val zoomNorm = ((36f - zoom) / 28f).coerceIn(0f, 1f)
+        targetPitch = Math.toRadians((24.0 + 18.0 * zoomNorm).toFloat().toDouble()).toFloat()
+        pitch += (targetPitch-pitch)*zoomLerp
         apply()
     }
 
     private fun apply() {
-        val yawRad = Math.toRadians(Theme.CAMERA_YAW_DEGREES.toDouble())
-        val pitchRad = Math.toRadians(Theme.CAMERA_PITCH_DEGREES.toDouble())
-        val cy = cos(yawRad).toFloat()*cos(pitchRad).toFloat()
-        val sy = sin(yawRad).toFloat()*cos(pitchRad).toFloat()
-        val py = sin(pitchRad).toFloat()
+        val cy = cos(yaw)*cos(pitch)
+        val sy = sin(yaw)*cos(pitch)
+        val py = sin(pitch)
         camera.lookAt(
             (focusX+sy*80f).toDouble(), (py*80f).toDouble(), (focusZ+cy*80f).toDouble(),
             focusX.toDouble(), 0.0, focusZ.toDouble(), 0.0, 1.0, 0.0,
@@ -363,15 +450,13 @@ class CameraRig(private val engine: Engine) {
     }
 
     private fun clampFocus() {
-        targetFocusX = targetFocusX.coerceIn(-WorldLayout.VALLEY_WIDTH/2f+8f, WorldLayout.VALLEY_WIDTH/2f-8f)
-        targetFocusZ = targetFocusZ.coerceIn(-WorldLayout.VALLEY_DEPTH/2f+8f, WorldLayout.VALLEY_DEPTH/2f-8f)
+        targetFocusX = targetFocusX.coerceIn(-22f, 22f)
+        targetFocusZ = targetFocusZ.coerceIn(-38f, 16f)
     }
 
     fun screenToGround(px: Float, py: Float): FloatArray {
-        val s = sin(Math.toRadians(Theme.CAMERA_YAW_DEGREES.toDouble())).toFloat()
-        val c = cos(Math.toRadians(Theme.CAMERA_YAW_DEGREES.toDouble())).toFloat()
-        val sp = sin(Math.toRadians(Theme.CAMERA_PITCH_DEGREES.toDouble())).toFloat()
-        val cp = cos(Math.toRadians(Theme.CAMERA_PITCH_DEGREES.toDouble())).toFloat()
+        val s = sin(yaw); val c = cos(yaw)
+        val sp = sin(pitch); val cp = cos(pitch)
         val halfHeight = zoom
         val halfWidth = zoom*viewportWidth/viewportHeight.toFloat()
         val eyeX = focusX+s*cp*80f; val eyeY = sp*80f; val eyeZ = focusZ+c*cp*80f
@@ -387,15 +472,13 @@ class CameraRig(private val engine: Engine) {
         x = pX+fwdX*t; z = pZ+fwdZ*t
         return floatArrayOf(
             x.coerceIn(-WorldLayout.VALLEY_WIDTH/2f+1f, WorldLayout.VALLEY_WIDTH/2f-1f),
-            z.coerceIn(-WorldLayout.VALLEY_DEPTH/2f+1f, WorldLayout.VALLEY_DEPTH/2f-1f),
+            z.coerceIn(WorldLayout.CANYON_Z_MIN+1f, WorldLayout.VALLEY_Z_MAX-1f),
         )
     }
 
     fun projectToScreen(x: Float, z: Float): FloatArray {
-        val s = sin(Math.toRadians(Theme.CAMERA_YAW_DEGREES.toDouble())).toFloat()
-        val c = cos(Math.toRadians(Theme.CAMERA_YAW_DEGREES.toDouble())).toFloat()
-        val sp = sin(Math.toRadians(Theme.CAMERA_PITCH_DEGREES.toDouble())).toFloat()
-        val cp = cos(Math.toRadians(Theme.CAMERA_PITCH_DEGREES.toDouble())).toFloat()
+        val s = sin(yaw); val c = cos(yaw)
+        val sp = sin(pitch); val cp = cos(pitch)
         val halfHeight = zoom
         val halfWidth = zoom*viewportWidth/viewportHeight.toFloat()
         val eyeX = focusX+s*cp*80f; val eyeY = sp*80f; val eyeZ = focusZ+c*cp*80f
@@ -449,6 +532,9 @@ class FilamentHost {
     private var running = false
     private var lastFrameNanos = 0L
 
+    /** Flips true after the first successfully presented frame (drives the loading screen). */
+    val firstFrameRendered = MutableStateFlow(false)
+
     fun bind(world: WorldRenderer) {
         this.world = world
         view.scene = world.scene
@@ -496,6 +582,7 @@ class FilamentHost {
         if (renderer.beginFrame(chain, frameTimeNanos)) {
             renderer.render(view)
             renderer.endFrame()
+            if (!firstFrameRendered.value) firstFrameRendered.value = true
         }
     }
 
