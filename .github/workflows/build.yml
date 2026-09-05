@@ -33,13 +33,13 @@ jobs:
       - name: Stage APK
         run: |
           mkdir -p dist
-          cp app/build/outputs/apk/release/app-release.apk dist/VillageForge-v1.2.apk
+          cp app/build/outputs/apk/release/app-release.apk dist/VillageForge-v1.3.apk
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: village-forge-apk
-          path: dist/VillageForge-v1.2.apk
+          path: dist/VillageForge-v1.3.apk
           retention-days: 30
           if-no-files-found: error
 
@@ -67,7 +67,7 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           disable-animations: true
           script: |
-            adb install -r dist/VillageForge-v1.2.apk
+            adb install -r dist/VillageForge-v1.3.apk
             adb logcat -c
             adb shell am start -W -n com.villageforge/.MainActivity
             sleep 20
@@ -75,6 +75,13 @@ jobs:
             adb shell "pidof com.villageforge" | grep -qE "[0-9]" && echo "=== APP IS STILL RUNNING — pid check PASSED ===" || { echo "=== APP PROCESS DIED ==="; exit 1; }
             if grep -q "FATAL EXCEPTION" full_logcat.txt; then grep -A 40 "FATAL EXCEPTION" full_logcat.txt; exit 1; fi
             echo "=== NO FATAL EXCEPTIONS — smoke test PASSED ==="
+            adb exec-out screencap -p > screen.png
+            echo "=== SCREENCAP TAKEN ==="
+
+      - name: Verify the 3D world actually renders colors (no all-white screen)
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq python3-pil
+          python3 ci/check_colors.py screen.png
 
       - name: Upload logcat
         if: always()
@@ -95,11 +102,11 @@ jobs:
           name: village-forge-apk
           path: dist
 
-      - name: Publish to GitHub Releases (tag v1.2)
+      - name: Publish to GitHub Releases (tag v1.3)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create v1.2 dist/VillageForge-v1.2.apk \
-            --title "Village Forge v1.2" \
-            --notes "Verified launch on an Android emulator in CI. Startup is now crash-guarded: if anything fails on a device, the app shows the full error report on screen instead of closing. Rendering falls back from OpenGL to Vulkan when needed. If a problem screen appears, send a screenshot of it." \
-            || gh release upload v1.2 dist/VillageForge-v1.2.apk --clobber
+          gh release create v1.3 dist/VillageForge-v1.3.apk \
+            --title "Village Forge v1.3" \
+            --notes "Colors and controls fixed. The world materials were rendering pure white because the lit material never assigned baseColor in its fragment shader — the full color palette (green grass, ore rocks, buildings, sky) now renders. Panning and pinch-zoom directions corrected. CI now screenshots the emulator and verifies the terrain is actually colored before every release." \
+            || gh release upload v1.3 dist/VillageForge-v1.3.apk --clobber

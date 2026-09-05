@@ -5,7 +5,7 @@ import kotlin.math.floor
 import kotlin.math.max
 
 object BuildInfo {
-    const val VERSION = "1.2"
+    const val VERSION = "1.3"
 }
 
 object Theme {

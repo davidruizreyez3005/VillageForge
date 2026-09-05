@@ -71,6 +71,10 @@ class AssetFactory(private val engine: Engine) {
 
     private fun litMaterialDef(): Material {
         if (litMaterial == null) {
+            // NOTE: .material(...) is REQUIRED. Without a fragment shader body,
+            // Filament compiles a valid material whose `material.baseColor`
+            // stays at its default (1,1,1) — every object renders pure WHITE
+            // no matter what baseColor uniform values we set at runtime.
             val pkg = MaterialBuilder()
                 .name("vf_lit")
                 .platform(MaterialBuilder.Platform.MOBILE)
@@ -81,7 +85,13 @@ class AssetFactory(private val engine: Engine) {
                 .uniformParameter(MaterialBuilder.UniformType.FLOAT3, "baseColor")
                 .uniformParameter(MaterialBuilder.UniformType.FLOAT, "roughness")
                 .uniformParameter(MaterialBuilder.UniformType.FLOAT, "metallic")
+                .material(
+                    "material.baseColor = float4(materialParams.baseColor, 1.0);\n" +
+                    "material.roughness = materialParams.roughness;\n" +
+                    "material.metallic = materialParams.metallic;\n"
+                )
                 .build(engine)
+            check(pkg.isValid) { "vf_lit material package failed to compile" }
             litMaterial = Material.Builder()
                 .payload(pkg.buffer, pkg.buffer.remaining())
                 .build(engine)
@@ -307,12 +317,16 @@ class CameraRig(private val engine: Engine) {
         val dx = dxPx*worldPerPixel; val dy = dyPx*worldPerPixel
         val yawRad = Math.toRadians(Theme.CAMERA_YAW_DEGREES.toDouble())
         val s = sin(yawRad).toFloat(); val c = cos(yawRad).toFloat()
-        targetFocusX += dy*s - dx*c
-        targetFocusZ += dy*c + dx*s
+        // Grab-style panning (Google-Maps convention): the world follows the
+        // finger. Screen-up on the ground is (-s, -c), screen-right is (c, -s);
+        // the focus moves OPPOSITE to the finger on both screen axes.
+        targetFocusX += -dx*c - dy*s
+        targetFocusZ +=  dx*s - dy*c
         clampFocus()
     }
 
-    fun zoomBy(factor: Float) { targetZoom = (targetZoom*factor).coerceIn(9f, 34f) }
+    /** Pinch-out (factor > 1) must zoom IN, i.e. shrink the visible world span. */
+    fun zoomBy(factor: Float) { targetZoom = (targetZoom / factor).coerceIn(9f, 34f) }
 
     fun update(dt: Float) {
         val panLerp = 1f - exp(-12f*dt)
