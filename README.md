@@ -22,6 +22,7 @@ A 3D idle-mining village game for Android, rendered with Google [Filament](https
 - Title screen with rising embers, village slot picker, and a loading flow
 - Procedural sound effects (mining, hammering, pouring, coins, fanfares, medal chimes) via a raw AudioTrack synth
 - Auto-saving to local JSON storage with atomic writes and v1 → v2 → v3 migration with offline progress
+- True fullscreen gameplay (status bar and navigation hidden) with a proper launcher icon (v2.1.1)
 
 ## Tech stack
 
@@ -37,7 +38,7 @@ The APK is built automatically by GitHub Actions on every push to `main`.
 1. Open the repository → **Actions** → **Build APK**
 2. Wait for the run to finish (a few minutes)
 3. Download the **village-forge-apk** artifact from the run page
-4. Unzip it and sideload `VillageForge-v2.1.apk` onto any Android 7.0+ device
+4. Unzip it and sideload `VillageForge-v2.1.1.apk` onto any Android 7.0+ device
 
 To build locally:
 

@@ -16,6 +16,9 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.lifecycleScope
 import com.villageforge.config.BuildInfo
 import com.villageforge.config.DayNight
@@ -82,6 +85,9 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         installCrashGuard()
+        // Fullscreen from the very first frame — including the crash-report
+        // screen path that bypasses startApp below.
+        runCatching { enterImmersiveMode() }
         try {
             startApp(savedInstanceState)
         } catch (t: Throwable) {
@@ -231,12 +237,40 @@ class MainActivity : ComponentActivity() {
 
     /** Rebuilds the activity with the chosen village slot — clean world, no leaks. */
     private fun openSlot(slot: Int) {
+        // Release THIS activity's Filament engine BEFORE launching the next
+        // one. The old and new activities briefly coexist during the relaunch
+        // and both engines are heavyweight — on low-RAM devices the overlap
+        // could stall or kill the process right when the loading screen is
+        // showing. Teardown is fully guarded, so late surface callbacks are
+        // harmless no-ops.
+        if (!startupFailed) {
+            runCatching { host.stop() }
+            runCatching { world.destroy() }
+            runCatching { host.destroy() }
+        }
         startActivity(
             Intent(this, MainActivity::class.java)
                 .putExtra("slot", slot)
                 .putExtra("phase", "loading")
         )
         finish()
+    }
+
+    /** True fullscreen: status bar and navigation buttons hidden. */
+    private fun enterImmersiveMode() {
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        val controller = WindowCompat.getInsetsController(window, window.decorView)
+        // Swipe from an edge reveals the bars briefly as an overlay.
+        controller.systemBarsBehavior =
+            WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        controller.hide(WindowInsetsCompat.Type.systemBars())
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        // The system likes to restore the bars after dialogs / rotation —
+        // re-enter fullscreen every time we regain focus.
+        if (hasFocus) enterImmersiveMode()
     }
 
     override fun onResume() {
@@ -258,8 +292,11 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
-        if (this::world.isInitialized) world.destroy()
-        if (this::host.isInitialized) host.destroy()
+        // Belt and suspenders: a failure while releasing GPU resources must
+        // never take the process down (it used to crash the app exactly when
+        // the slot picker relaunched into the loading screen).
+        if (this::world.isInitialized) runCatching { world.destroy() }
+        if (this::host.isInitialized) runCatching { host.destroy() }
         super.onDestroy()
     }
 

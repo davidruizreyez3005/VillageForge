@@ -621,17 +621,26 @@ class WorldRenderer(private val engine: Engine, private val game: GameState) {
         a.b + (b.b - a.b) * t,
     )
 
+    private var destroyed = false
+
     fun destroy() {
-        for (i in 0 until rockCount) if (!rockVisible[i]) scene.addEntity(rockEntities[i])
-        if (!binVisible) { scene.addEntity(binCrateEntity); scene.addEntity(binLidEntity) }
-        if (!furnaceVisible) { for (e in furnaceEntities) scene.addEntity(e) }
-        assets.destroy(scene)
-        engine.destroyEntity(sunEntity)
-        engine.destroyEntity(furnaceLightEntity)
-        engine.destroyEntity(monolithLightEntity)
-        indirectLight?.let { engine.destroyIndirectLight(it) }
-        sky?.let { engine.destroySkybox(it) }
-        cameraRig.destroy()
-        engine.destroyScene(scene)
+        if (destroyed) return
+        destroyed = true
+        // Exception-hardened teardown: a rendering-resource failure during
+        // activity destroy must NEVER crash the process — it used to kill the
+        // freshly relaunched slot-picker activity on its loading screen.
+        runCatching {
+            for (i in 0 until rockCount) if (!rockVisible[i]) scene.addEntity(rockEntities[i])
+            if (!binVisible) { scene.addEntity(binCrateEntity); scene.addEntity(binLidEntity) }
+            if (!furnaceVisible) { for (e in furnaceEntities) scene.addEntity(e) }
+        }
+        runCatching { assets.destroy(scene) }
+        runCatching { engine.destroyEntity(sunEntity) }
+        runCatching { engine.destroyEntity(furnaceLightEntity) }
+        runCatching { engine.destroyEntity(monolithLightEntity) }
+        runCatching { indirectLight?.let { engine.destroyIndirectLight(it) } }
+        runCatching { sky?.let { engine.destroySkybox(it) } }
+        runCatching { cameraRig.destroy() }
+        runCatching { engine.destroyScene(scene) }
     }
 }

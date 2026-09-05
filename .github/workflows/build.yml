@@ -33,13 +33,13 @@ jobs:
       - name: Stage APK
         run: |
           mkdir -p dist
-          cp app/build/outputs/apk/release/app-release.apk dist/VillageForge-v2.1.apk
+          cp app/build/outputs/apk/release/app-release.apk dist/VillageForge-v2.1.1.apk
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: village-forge-apk
-          path: dist/VillageForge-v2.1.apk
+          path: dist/VillageForge-v2.1.1.apk
           retention-days: 30
           if-no-files-found: error
 
@@ -69,7 +69,7 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           disable-animations: true
           script: |
-            adb install -r dist/VillageForge-v2.1.apk
+            adb install -r dist/VillageForge-v2.1.1.apk
             adb logcat -c
             # phase=game fast-forwards past the title screen so the smoke test
             # exercises the live 3D world and HUD directly.
@@ -115,21 +115,20 @@ jobs:
           name: village-forge-apk
           path: dist
 
-      - name: Publish to GitHub Releases (tag v2.1)
+      - name: Publish to GitHub Releases (tag v2.1.1)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create v2.1 dist/VillageForge-v2.1.apk \
-            --title "Village Forge v2.1 — The Hollow Update" \
-            --notes "The valley lights up and the west trail is open.
+          gh release create v2.1.1 dist/VillageForge-v2.1.1.apk \
+            --title "Village Forge v2.1.1 — Startup Crash Hotfix" \
+            --notes "Fixes the blocker that stopped many devices from getting into the game.
 
-          New in v2.1:
-          - Crystal Hollow: a new mining area west of the canyon — follow the lanterns, mine crystal-rich veins, and find the glowing monolith, old mine entrance, and standing stones
-          - Achievements: 26 medals with coin rewards, a medals panel, and unlock banners
-          - Music: a procedural village soundtrack (music-box melody + bass) that calms down at night, with a HUD toggle
-          - Save slots: three villages on one device — pick, play, and delete from the title screen (old saves migrate to slot 1)
-          - Camera rework: locked 45-degree isometric view, drag to pan (now the world moves opposite your finger), pinch to zoom
-          - Fixed the pitch-black dawn/dusk crash: smooth daylight curve and bright moonlit nights
-          - Fixed the pickaxe swing: a proper overhead chop that lands in front of the smith, with a full-size pick and visible boots
-          - New quest: The West Trail; walkers now follow valley trails instead of trudging over cliff walls" \
-            || gh release upload v2.1 dist/VillageForge-v2.1.apk --clobber
+          Fixed in v2.1.1:
+          - LOADING SCREEN BLOCKER: entering a village could crash the app during the save-slot relaunch, leaving you stuck on the loading screen forever. The terrain's shared GPU buffer was being destroyed twice at activity teardown; teardown is now deduplicated and exception-hardened so it can never kill the process
+          - CRASH ON EXIT: the same double-destroy crashed the app whenever the activity was destroyed (back press, slot switching). Both are fixed
+          - The old Filament engine is now fully released BEFORE the new village activity starts, so low-RAM devices never run two 3D engines at once during the loading transition
+
+          New in v2.1.1:
+          - App icon: a proper Village Forge launcher icon (pickaxe over forge embers), including adaptive icons for modern launchers
+          - True fullscreen: the status bar and navigation buttons are now hidden — swipe from an edge to peek them" \
+            || gh release upload v2.1.1 dist/VillageForge-v2.1.1.apk --clobber

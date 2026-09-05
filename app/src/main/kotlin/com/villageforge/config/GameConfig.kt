@@ -7,7 +7,7 @@ import kotlin.math.max
 import kotlin.math.pow
 
 object BuildInfo {
-    const val VERSION = "2.1"
+    const val VERSION = "2.1.1"
 }
 
 object Theme {

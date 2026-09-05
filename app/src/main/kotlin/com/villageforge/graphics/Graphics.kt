@@ -70,6 +70,7 @@ class AssetFactory(private val engine: Engine) {
     private val meshes = ArrayList<Mesh>()
     private var litMaterial: Material? = null
     private var smokeMaterial: Material? = null
+    private var teardownDone = false
 
     init { MaterialBuilder.init() }
 
@@ -355,11 +356,34 @@ class AssetFactory(private val engine: Engine) {
     }
 
     fun destroy(scene: Scene) {
-        for (entity in entities) { scene.removeEntity(entity); engine.destroyEntity(entity) }
-        for (instance in materialInstances) engine.destroyMaterialInstance(instance)
-        litMaterial?.let { engine.destroyMaterial(it) }
-        smokeMaterial?.let { engine.destroyMaterial(it) }
-        for (mesh in meshes) { engine.destroyVertexBuffer(mesh.vertexBuffer); engine.destroyIndexBuffer(mesh.indexBuffer) }
+        // Idempotent + exception-hardened teardown. A crash here used to kill
+        // the whole process at activity destroy (which fires mid-transition
+        // when the slot picker relaunches the activity), leaving the new
+        // activity dead on its loading screen.
+        if (teardownDone) return
+        teardownDone = true
+        for (entity in entities) {
+            runCatching { scene.removeEntity(entity) }
+            runCatching { engine.destroyEntity(entity) }
+        }
+        entities.clear()
+        for (instance in materialInstances) runCatching { engine.destroyMaterialInstance(instance) }
+        materialInstances.clear()
+        litMaterial?.let { runCatching { engine.destroyMaterial(it) } }
+        smokeMaterial?.let { runCatching { engine.destroyMaterial(it) } }
+        litMaterial = null
+        smokeMaterial = null
+        // CRITICAL: terrain color variants share ONE VertexBuffer — destroy
+        // each unique GPU buffer exactly once. Calling destroyVertexBuffer()
+        // on an already-destroyed buffer throws IllegalStateException and
+        // crashed every activity teardown before this dedupe existed.
+        val deadVertexBuffers = HashSet<VertexBuffer>()
+        val deadIndexBuffers = HashSet<IndexBuffer>()
+        for (mesh in meshes) {
+            if (deadVertexBuffers.add(mesh.vertexBuffer)) runCatching { engine.destroyVertexBuffer(mesh.vertexBuffer) }
+            if (deadIndexBuffers.add(mesh.indexBuffer)) runCatching { engine.destroyIndexBuffer(mesh.indexBuffer) }
+        }
+        meshes.clear()
     }
 }
 
@@ -521,6 +545,7 @@ class FilamentHost {
     private val choreographer = Choreographer.getInstance()
     private var running = false
     private var lastFrameNanos = 0L
+    private var destroyed = false
 
     /** Flips true after the first successfully presented frame (drives the loading screen). */
     val firstFrameRendered = MutableStateFlow(false)
@@ -537,23 +562,27 @@ class FilamentHost {
     }
 
     fun onSurfaceAvailable(surface: Surface) {
+        if (destroyed) return
         swapChain = engine.createSwapChain(surface)
         start()
     }
 
     fun onSurfaceChanged(width: Int, height: Int) {
+        if (destroyed) return
         view.viewport = Viewport(0, 0, width, height)
         world?.onViewport(width, height)
     }
 
     fun onSurfaceDestroyed() {
+        if (destroyed) return
         stop()
-        swapChain?.let { engine.destroySwapChain(it) }
+        swapChain?.let { runCatching { engine.destroySwapChain(it) } }
         swapChain = null
     }
 
     fun start() {
-        if (!running) { running = true; lastFrameNanos = 0L; choreographer.postFrameCallback(frameCallback) }
+        if (destroyed || running) return
+        running = true; lastFrameNanos = 0L; choreographer.postFrameCallback(frameCallback)
     }
 
     fun stop() { running = false; choreographer.removeFrameCallback(frameCallback) }
@@ -566,6 +595,7 @@ class FilamentHost {
     }
 
     private fun draw(dt: Float, frameTimeNanos: Long) {
+        if (destroyed) return
         val chain = swapChain ?: return
         val w = world ?: return
         w.update(dt)
@@ -577,11 +607,16 @@ class FilamentHost {
     }
 
     fun destroy() {
+        if (destroyed) return
+        destroyed = true
         stop()
-        swapChain?.let { engine.destroySwapChain(it) }
+        swapChain?.let { runCatching { engine.destroySwapChain(it) } }
         swapChain = null
-        engine.destroyView(view)
-        engine.destroyRenderer(renderer)
-        engine.destroy()
+        // The SurfaceView outlives this call while the activity finishes, so
+        // surface callbacks keep arriving after the engine is gone — all
+        // entry points above are guarded by `destroyed`.
+        runCatching { engine.destroyView(view) }
+        runCatching { engine.destroyRenderer(renderer) }
+        runCatching { engine.destroy() }
     }
 }
