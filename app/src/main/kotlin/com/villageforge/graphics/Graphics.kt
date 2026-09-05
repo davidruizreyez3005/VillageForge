@@ -215,22 +215,44 @@ class AssetFactory(private val engine: Engine) {
         }
     }
 
+    /**
+     * Filament has no NORMAL vertex attribute: LIT materials consume the TANGENTS
+     * attribute (tangent frame packed as a quaternion, w carries handedness).
+     * We encode each per-face normal as the shortest-arc rotation from +Z onto
+     * the normal, which yields a valid TBN whose N column is the normal.
+     */
     private fun newVertexBuffer(positions: FloatArray, normals: FloatArray): VertexBuffer {
+        val vertexCount = positions.size / 3
+        val floatsPerVertex = 7 // pos(3) + tangent quaternion(4)
         val vb = VertexBuffer.Builder()
-            .bufferCount(1).vertexCount(positions.size/3)
-            .attribute(VertexBuffer.VertexAttribute.POSITION, 0, VertexBuffer.AttributeType.FLOAT3, 0, 24)
-            .attribute(VertexBuffer.VertexAttribute.NORMAL, 0, VertexBuffer.AttributeType.FLOAT3, 12, 24)
+            .bufferCount(1).vertexCount(vertexCount)
+            .attribute(VertexBuffer.VertexAttribute.POSITION, 0, VertexBuffer.AttributeType.FLOAT3, 0, 28)
+            .attribute(VertexBuffer.VertexAttribute.TANGENTS, 0, VertexBuffer.AttributeType.FLOAT4, 12, 28)
             .build(engine)
-        val buf = ByteBuffer.allocateDirect(positions.size*8).order(ByteOrder.nativeOrder())
-        val floats = buf.asFloatBuffer()
+        val buf = ByteBuffer.allocateDirect(vertexCount * floatsPerVertex * 4).order(ByteOrder.nativeOrder())
+        val packed = buf.asFloatBuffer()
         var i = 0
         while (i < positions.size) {
-            floats.put(positions[i]); floats.put(positions[i+1]); floats.put(positions[i+2])
-            floats.put(normals[i]); floats.put(normals[i+1]); floats.put(normals[i+2])
+            packed.put(positions[i]); packed.put(positions[i+1]); packed.put(positions[i+2])
+            val quat = normalToTangentQuat(normals[i], normals[i+1], normals[i+2])
+            packed.put(quat[0]); packed.put(quat[1]); packed.put(quat[2]); packed.put(quat[3])
             i += 3
         }
         vb.setBufferAt(engine, 0, buf)
         return vb
+    }
+
+    private fun normalToTangentQuat(nx: Float, ny: Float, nz: Float): FloatArray {
+        // shortest-arc quaternion rotating +Z onto n: (cross((0,0,1), n), 1 + dot)
+        val x: Float; val y: Float; val z: Float; val w: Float
+        if (nz >= 0.99999f) { x = 0f; y = 0f; z = 0f; w = 1f }
+        else if (nz <= -0.99999f) { x = 1f; y = 0f; z = 0f; w = 0f }
+        else {
+            x = -ny; y = nx; z = 0f; w = 1f + nz
+            val len = sqrt(x*x + y*y + z*z + w*w)
+            x /= len; y /= len; z /= len; w /= len
+        }
+        return floatArrayOf(x, y, z, w)
     }
 
     private fun newIndexBuffer(indices: List<Int>): IndexBuffer {
@@ -403,7 +425,7 @@ class FilamentHost {
 
     fun stop() { running = false; choreographer.removeFrameCallback(frameCallback) }
 
-    private val frameCallback = Choreographer.FrameCallback { frameTimeNanos: Long ->
+    private val frameCallback: Choreographer.FrameCallback = Choreographer.FrameCallback { frameTimeNanos: Long ->
         val dt = if (lastFrameNanos == 0L) 0f else (frameTimeNanos-lastFrameNanos)*1e-9f
         lastFrameNanos = frameTimeNanos
         draw(dt, frameTimeNanos)
