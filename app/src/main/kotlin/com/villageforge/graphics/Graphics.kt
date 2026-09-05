@@ -86,9 +86,12 @@ class AssetFactory(private val engine: Engine) {
                 .uniformParameter(MaterialBuilder.UniformType.FLOAT, "roughness")
                 .uniformParameter(MaterialBuilder.UniformType.FLOAT, "metallic")
                 .material(
-                    "material.baseColor = float4(materialParams.baseColor, 1.0);\n" +
-                    "material.roughness = materialParams.roughness;\n" +
-                    "material.metallic = materialParams.metallic;\n"
+                    "void material(inout MaterialInputs material) {\n" +
+                    "    prepareMaterial(material);\n" +
+                    "    material.baseColor = float4(materialParams.baseColor, 1.0);\n" +
+                    "    material.roughness = materialParams.roughness;\n" +
+                    "    material.metallic = materialParams.metallic;\n" +
+                    "}\n"
                 )
                 .build(engine)
             check(pkg.isValid) { "vf_lit material package failed to compile" }
