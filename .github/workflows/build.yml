@@ -1,26 +1,53 @@
 name: Build APK
+
 on:
   push:
     branches: [main]
   workflow_dispatch:
+
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
+
       - uses: gradle/actions/setup-gradle@v3
         with:
           gradle-version: '8.9'
-      - name: Build debug APK
-        run: gradle assembleDebug --stacktrace
-      - name: Upload APK
+
+      - name: Build signed release APK
+        run: gradle assembleRelease --stacktrace
+
+      - name: Verify APK is signed
+        run: |
+          $ANDROID_HOME/build-tools/34.0.0/apksigner verify --print-certs app/build/outputs/apk/release/app-release.apk
+
+      - name: Stage APK
+        run: |
+          mkdir -p dist
+          cp app/build/outputs/apk/release/app-release.apk dist/VillageForge-v1.1.apk
+
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: village-forge-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: dist/VillageForge-v1.1.apk
           retention-days: 30
           if-no-files-found: error
+
+      - name: Publish to GitHub Releases (tag v1.1)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create v1.1 dist/VillageForge-v1.1.apk \
+            --title "Village Forge v1.1" \
+            --notes "Stable build. Fixes the startup crash: Filament native libraries are now initialized before the 3D engine starts. APK is signed with a persistent keystore, so all future updates install over this one without uninstalling. If Android blocks installation over the previous v1.0A build (different signature), uninstall the old app once and install this APK." \
+            || gh release upload v1.1 dist/VillageForge-v1.1.apk --clobber

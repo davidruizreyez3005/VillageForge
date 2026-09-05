@@ -12,13 +12,26 @@ android {
         applicationId = "com.villageforge"
         minSdk = 24
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0A"
+        versionCode = 2
+        versionName = "1.1"
+    }
+    signingConfigs {
+        create("release") {
+            storeFile = rootProject.file("signing/villageforge.keystore")
+            storePassword = "villageforge2024"
+            keyAlias = "villageforge"
+            keyPassword = "villageforge2024"
+        }
     }
     buildTypes {
         release {
             isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("release")
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+        }
+        debug {
+            // Same stable signature for every CI build so APKs upgrade-install cleanly.
+            signingConfig = signingConfigs.getByName("release")
         }
     }
     compileOptions {

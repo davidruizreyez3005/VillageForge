@@ -388,6 +388,15 @@ class CameraRig(private val engine: Engine) {
 }
 
 class FilamentHost {
+    companion object {
+        init {
+            // CRITICAL: loads libfilament-jni.so before any Filament API is used.
+            // Without this, Engine.create() throws UnsatisfiedLinkError and the
+            // app crashes immediately on launch.
+            Filament.init()
+        }
+    }
+
     val engine: Engine = Engine.create()
     private val renderer: Renderer = engine.createRenderer()
     private val view: View = engine.createView()
