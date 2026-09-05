@@ -73,6 +73,7 @@ class AssetFactory(private val engine: Engine) {
         if (litMaterial == null) {
             val pkg = MaterialBuilder()
                 .name("vf_lit")
+                .platform(MaterialBuilder.Platform.MOBILE)
                 .shading(MaterialBuilder.Shading.LIT)
                 .materialDomain(MaterialBuilder.MaterialDomain.SURFACE)
                 .blending(MaterialBuilder.BlendingMode.OPAQUE)

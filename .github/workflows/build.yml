@@ -67,24 +67,14 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           disable-animations: true
           script: |
-            set -e
             adb install -r dist/VillageForge-v1.2.apk
             adb logcat -c
             adb shell am start -W -n com.villageforge/.MainActivity
             sleep 20
-            adb logcat -d > full_logcat.txt || true
-            PID=$(adb shell pidof com.villageforge | tr -d '\r' || true)
-            if [ -z "$PID" ]; then
-              echo "=== APP PROCESS DIED — dumping logcat ==="
-              cat full_logcat.txt
-              exit 1
-            fi
-            if grep -q "FATAL EXCEPTION" full_logcat.txt; then
-              echo "=== FATAL EXCEPTION IN LOGCAT ==="
-              grep -A 40 "FATAL EXCEPTION" full_logcat.txt
-              exit 1
-            fi
-            echo "=== APP IS RUNNING (pid $PID) — smoke test PASSED ==="
+            adb logcat -d > full_logcat.txt
+            adb shell "pidof com.villageforge" | grep -qE "[0-9]" && echo "=== APP IS STILL RUNNING — pid check PASSED ===" || { echo "=== APP PROCESS DIED ==="; exit 1; }
+            if grep -q "FATAL EXCEPTION" full_logcat.txt; then grep -A 40 "FATAL EXCEPTION" full_logcat.txt; exit 1; fi
+            echo "=== NO FATAL EXCEPTIONS — smoke test PASSED ==="
 
       - name: Upload logcat
         if: always()
