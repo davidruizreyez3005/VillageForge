@@ -244,7 +244,7 @@ class AssetFactory(private val engine: Engine) {
 
     private fun normalToTangentQuat(nx: Float, ny: Float, nz: Float): FloatArray {
         // shortest-arc quaternion rotating +Z onto n: (cross((0,0,1), n), 1 + dot)
-        val x: Float; val y: Float; val z: Float; val w: Float
+        var x: Float; var y: Float; var z: Float; var w: Float
         if (nz >= 0.99999f) { x = 0f; y = 0f; z = 0f; w = 1f }
         else if (nz <= -0.99999f) { x = 1f; y = 0f; z = 0f; w = 0f }
         else {
