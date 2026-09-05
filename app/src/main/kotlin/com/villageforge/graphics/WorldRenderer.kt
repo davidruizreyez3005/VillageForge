@@ -75,6 +75,15 @@ class WorldRenderer(private val engine: Engine, private val game: GameState) {
     private val villagerRigs = ArrayList<HumanoidRig>()
     private val rigParked = ArrayList<Boolean>()
 
+    // v2.2 build-time scratch + facing — MUST be declared before the init
+    // block: buildVillage() runs from init and Kotlin initializes fields in
+    // declaration order (declaring these after init left them null on device).
+    /** All buildings face the camera's three-quarter view (45° yaw). */
+    private val FACING = 45f
+    private val roofM = FloatArray(16)
+    private val roofM2 = FloatArray(16)
+    private val roofM3 = FloatArray(16)
+
     private companion object {
         const val RAIN_COUNT = 64
         const val RAIN_AREA = 17f
@@ -450,9 +459,6 @@ class WorldRenderer(private val engine: Engine, private val game: GameState) {
 
     // ---- The Village (v2.2) --------------------------------------------------
 
-    /** All buildings face the camera's three-quarter view (45° yaw). */
-    private val FACING = 45f
-
     private fun addPart(
         group: ArrayList<Int>, x: Float, y: Float, z: Float,
         w: Float, h: Float, d: Float, instance: MaterialInstance, yaw: Float = FACING,
@@ -463,10 +469,6 @@ class WorldRenderer(private val engine: Engine, private val game: GameState) {
     }
 
     /** A pitched two-slope roof: the one flourish the box world allows. */
-    private val roofM = FloatArray(16)
-    private val roofM2 = FloatArray(16)
-    private val roofM3 = FloatArray(16)
-
     private fun addRoof(group: ArrayList<Int>, x: Float, y: Float, z: Float, w: Float, d: Float, instance: MaterialInstance, yaw: Float = FACING) {
         val a = ROOF_PITCH
         val rise = (d / 2f) * tan(a)
