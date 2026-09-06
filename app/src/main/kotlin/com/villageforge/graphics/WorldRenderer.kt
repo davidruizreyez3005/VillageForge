@@ -233,11 +233,23 @@ class WorldRenderer(private val engine: Engine, private val game: GameState) {
         val instances = Theme.CLIFF.map { assets.material(it, Theme.ROUGHNESS_PROP) }
         val rng = Random(99)
         val half = WorldLayout.VALLEY_WIDTH / 2f
-        // Far wall behind the north canyon and the hollow.
-        addCliffRow(rng, instances, WorldLayout.HOLLOW_X_MIN - 2.5f, half + 2f, WorldLayout.CANYON_Z_MIN - 2.2f)
-        // Valley north rim, leaving the canyon pass open around |x| < 8.5.
+        // Far wall behind the hollow and the link (v3.1: the link's north lip
+        // is deeper than the canyon's now, so this row keeps clear of both).
+        addCliffRow(rng, instances, WorldLayout.HOLLOW_X_MIN - 2.5f, WorldLayout.LINK_X_MAX, WorldLayout.HOLLOW_Z_MIN - 3.3f)
+        // Backdrop behind the canyon's own far wall, running east across the rim.
+        addCliffRow(rng, instances, -13f, half + 2f, WorldLayout.CANYON_Z_MIN - 2.2f)
+        // Valley north rim, leaving the canyon pass open around |x| < 8.5 and
+        // the East Cut mouth open across its span (v3.1: the cut now meets
+        // the rim band, so the row splits around it).
         addCliffRow(rng, instances, -half - 2f, -8.5f, WorldLayout.VALLEY_Z_MIN - 1.5f)
-        addCliffRow(rng, instances, 8.5f, half + 2f, WorldLayout.VALLEY_Z_MIN - 1.5f)
+        addCliffRow(rng, instances, 8.5f, WorldLayout.EAST_X_MIN - 1.5f, WorldLayout.VALLEY_Z_MIN - 1.5f)
+        addCliffRow(rng, instances, WorldLayout.EAST_X_MAX + 1.5f, half + 2f, WorldLayout.VALLEY_Z_MIN - 1.5f)
+        // v3.1 — the ring closes: the south meadow rim (road left open at the
+        // middle) and the east/west valley walls.
+        addCliffRow(rng, instances, -half + 2f, -5f, WorldLayout.VALLEY_Z_MAX + 1.5f)
+        addCliffRow(rng, instances, 5f, half - 2f, WorldLayout.VALLEY_Z_MAX + 1.5f)
+        addCliffColumn(rng, instances, WorldLayout.VALLEY_Z_MIN + 2f, WorldLayout.VALLEY_Z_MAX - 1f, half + 1.5f)
+        addCliffColumn(rng, instances, WorldLayout.VALLEY_Z_MIN + 2f, WorldLayout.VALLEY_Z_MAX - 1f, -half - 1.5f)
         // Hollow rims: south lip and the sheer west wall.
         addCliffRow(rng, instances, WorldLayout.HOLLOW_X_MIN - 1.5f, WorldLayout.HOLLOW_X_MAX - 1f, WorldLayout.HOLLOW_Z_MAX + 0.5f)
         addCliffColumn(rng, instances, WorldLayout.HOLLOW_Z_MIN + 1f, WorldLayout.HOLLOW_Z_MAX + 1f, WorldLayout.HOLLOW_X_MIN - 1.5f)
@@ -1507,8 +1519,11 @@ class WorldRenderer(private val engine: Engine, private val game: GameState) {
         val lm = engine.lightManager
         lm.setColor(sunLightInstance, sunColor.r, sunColor.g, sunColor.b)
         lm.setIntensity(sunLightInstance, sunLux)
-        // Sun path by day; a fixed high moon by deep night; blended between.
-        val azDeg = lerp(75f, 285f, dayT)
+        // v3.1 — sun path by day now sweeps the CAMERA's side (south through
+        // east), mirroring Theme.SUN_DIRECTION: every face the player sees
+        // stays key-lit instead of falling into ambient-only shade. The moon
+        // keeps its fixed high south-east perch by night.
+        val azDeg = lerp(105f, 15f, dayT)
         val elDeg = 10f + 60f * elevationParam
         val az = Math.toRadians(azDeg.toDouble())
         val el = Math.toRadians(elDeg.toDouble())

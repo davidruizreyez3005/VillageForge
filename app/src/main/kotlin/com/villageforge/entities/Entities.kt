@@ -129,10 +129,28 @@ class Player {
         faceToward(targetX, targetZ, dt)
         val speed = if (!speedOverride.isNaN()) speedOverride else PlayerConfig.MOVE_SPEED + moveSpeedBonus
         val step = speed * dt
-        if (step >= d) { x = targetX; z = targetZ; targetX = Float.NaN; targetZ = Float.NaN }
-        else { x += dx / d * step; z += dz / d * step }
+        if (step >= d) { stepTo(targetX, targetZ); targetX = Float.NaN; targetZ = Float.NaN }
+        else stepTo(x + dx / d * step, z + dz / d * step)
         walkPhase += step * PlayerConfig.WALK_PHASE_PER_UNIT
-        animState = AnimState.WALK
+        animState = if (isMoving) AnimState.WALK else AnimState.IDLE
+    }
+
+    /**
+     * v3.1 — the invisible barrier. Steep slopes are walls: a move that would
+     * land on unwalkable ground is refused, sliding along whichever axis is
+     * still open (so hugging a wall still carries you down its length). When
+     * both axes are blocked the current goal is dropped — the next tick
+     * either pulls the following route leg or the walker simply stops.
+     */
+    private fun stepTo(nx: Float, nz: Float) {
+        if (WorldLayout.isWalkable(nx, nz)) { x = nx; z = nz; return }
+        var slid = false
+        if (WorldLayout.isWalkable(nx, z)) { x = nx; slid = true }
+        if (WorldLayout.isWalkable(x, nz)) { z = nz; slid = true }
+        if (slid) return
+        // Fully walled in: give up on this goal, keep the route queue alive.
+        targetX = Float.NaN; targetZ = Float.NaN
+        if (finalX.isNaN() && routeLegs.isEmpty()) animState = AnimState.IDLE
     }
 
     private fun faceToward(tx: Float, tz: Float, dt: Float) {

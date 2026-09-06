@@ -319,10 +319,12 @@ class AssetFactory(private val engine: Engine) {
 
     private fun buildTerrain(): List<Mesh> {
         val cell = WorldLayout.TERRAIN_CELL
-        val x0 = WorldLayout.HOLLOW_X_MIN   // west edge of the Crystal Hollow
-        val x1 = WorldLayout.VALLEY_WIDTH / 2f
-        val z0 = WorldLayout.CANYON_Z_MIN - 1.5f
-        val z1 = WorldLayout.VALLEY_Z_MAX
+        // v3.1 — the mesh now covers the whole visual bowl (valley + mine
+        // corridors + the rim mountains that wall the map on every side).
+        val x0 = WorldLayout.TERRAIN_X_MIN
+        val x1 = WorldLayout.TERRAIN_X_MAX
+        val z0 = WorldLayout.TERRAIN_Z_MIN
+        val z1 = WorldLayout.TERRAIN_Z_MAX
         val nx = ((x1 - x0) / cell).toInt() + 1
         val nz = ((z1 - z0) / cell).toInt() + 1
         val heights = FloatArray(nx * nz); val positions = FloatArray(nx * nz * 3)
@@ -357,10 +359,14 @@ class AssetFactory(private val engine: Engine) {
             }
         }
         val vb = newVertexBuffer(positions, normals)
-        // The bounds must cover the whole strip from the hollow to the canyon floor.
+        // v3.1 — bounds track the real height range: the bowl's rim
+        // mountains run far higher than the old flat-valley box allowed,
+        // and an under-sized culling box pops whole mountains out of view.
+        var hMin = Float.MAX_VALUE; var hMax = -Float.MAX_VALUE
+        for (h in heights) { if (h < hMin) hMin = h; if (h > hMax) hMax = h }
         val bounds = Box(
-            floatArrayOf((x0 + x1) / 2f, 1.5f, (z0 + z1) / 2f),
-            floatArrayOf((x1 - x0) / 2f + 2f, 8f, (z1 - z0) / 2f + 2f),
+            floatArrayOf((x0 + x1) / 2f, (hMin + hMax) / 2f, (z0 + z1) / 2f),
+            floatArrayOf((x1 - x0) / 2f + 2f, (hMax - hMin) / 2f + 2f, (z1 - z0) / 2f + 2f),
         )
         return variantIndices.map { idx ->
             registerMesh(vb, newIndexBuffer(idx), idx.size, bounds)
@@ -680,14 +686,16 @@ class AssetFactory(private val engine: Engine) {
     private fun buildScatter(pebbles: Boolean): Mesh {
         val rng = java.util.Random(if (pebbles) 8181 else 5150)
         val positions = ArrayList<Float>(3072); val normals = ArrayList<Float>(3072); val indices = ArrayList<Int>(2304)
-        val target = if (pebbles) 70 else 170
+        // v3.1 — the wider valley gets dressed too: scatter now lands anywhere
+        // the ground is walkable (valley floor + all mine corridors).
+        val target = if (pebbles) 110 else 260
         var placed = 0
         var attempts = 0
-        while (placed < target && attempts < 6000) {
+        while (placed < target && attempts < 9000) {
             attempts++
             val x = WorldLayout.PLAY_X_MIN + 1.5f + rng.nextFloat() * (WorldLayout.PLAY_X_MAX - WorldLayout.PLAY_X_MIN - 3f)
             val z = WorldLayout.PLAY_Z_MIN + 1.5f + rng.nextFloat() * (WorldLayout.PLAY_Z_MAX - WorldLayout.PLAY_Z_MIN - 3f)
-            if (WorldLayout.corridorOutsideDistance(x, z) > 3.5f) continue
+            if (!WorldLayout.isWalkable(x, z)) continue
             if (WorldLayout.dist(x, z, WorldLayout.SPAWN_X, WorldLayout.SPAWN_Z) < 3.2f) continue
             if (WorldLayout.dist(x, z, WorldLayout.TRADE_POST_X, WorldLayout.TRADE_POST_Z) < 4.2f) continue
             if (WorldLayout.dist(x, z, WorldLayout.BIN_X, WorldLayout.BIN_Z) < 2.6f) continue
@@ -875,9 +883,10 @@ class CameraRig(private val engine: Engine) {
     fun update(dt: Float) {
         val panLerp = 1f - exp(-12f*dt)
         val zoomLerp = 1f - exp(-10f*dt)
+        zoom += (targetZoom-zoom)*zoomLerp
+        clampFocus()   // the margin tracks the zoom, so re-clamp after it moves
         focusX += (targetFocusX-focusX)*panLerp
         focusZ += (targetFocusZ-focusZ)*panLerp
-        zoom += (targetZoom-zoom)*zoomLerp
         apply()
     }
 
@@ -897,11 +906,25 @@ class CameraRig(private val engine: Engine) {
     }
 
     private fun clampFocus() {
-        // X spans the hollow in the west through the valley's east rim; Z the
-        // canyon depth through the south meadow.
-        targetFocusX = targetFocusX.coerceIn(-42f, 24f)
-        targetFocusZ = targetFocusZ.coerceIn(-40f, 16f)
+        // v3.1 — pan limits that track the zoom. The view's footprint on the
+        // ground grows ~1.4x the zoom along the screen-vertical axis (45° yaw
+        // / 32° pitch ortho) plus the aspect-scaled horizontal span, so the
+        // deeper the player zooms out the tighter the focus is reined in —
+        // the frame never leaves the terrain bowl, however wide the phone.
+        val aspect = if (viewportHeight > 0) viewportWidth.toFloat() / viewportHeight.toFloat() else 1f
+        val marginX = (1.45f + 0.75f * aspect) * zoom
+        val marginZ = 1.45f * zoom
+        val xMin = (WorldLayout.TERRAIN_X_MIN + marginX).coerceAtMost(FRAME_CX)
+        val xMax = (WorldLayout.TERRAIN_X_MAX - marginX).coerceAtLeast(FRAME_CX)
+        val zMin = (WorldLayout.TERRAIN_Z_MIN + marginZ).coerceAtMost(FRAME_CZ)
+        val zMax = (WorldLayout.TERRAIN_Z_MAX - marginZ).coerceAtLeast(FRAME_CZ)
+        targetFocusX = targetFocusX.coerceIn(xMin, xMax)
+        targetFocusZ = targetFocusZ.coerceIn(zMin, zMax)
     }
+
+    /** Center of the visual bowl — the fallback focus when fully zoomed out. */
+    private val FRAME_CX = (WorldLayout.TERRAIN_X_MIN + WorldLayout.TERRAIN_X_MAX) / 2f
+    private val FRAME_CZ = (WorldLayout.TERRAIN_Z_MIN + WorldLayout.TERRAIN_Z_MAX) / 2f
 
     /** v2.2 — where the camera looks; the rain column follows it. */
     fun focus(): FloatArray = floatArrayOf(focusX, focusZ)

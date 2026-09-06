@@ -567,6 +567,14 @@ class SaveManager(context: Context) {
      * save becomes safe to resume rather than exploitable.
      */
     private fun sanitize(game: GameState) {
+        // v3.1 — a body parked where the map's slopes steepened (the map grew
+        // and mine mouths moved) snaps to the nearest standable ground so the
+        // invisible barriers can never trap a restored save inside a wall.
+        for (body in listOf(game.player) + game.workers.map { it.body }) {
+            val spot = WorldLayout.nearestWalkable(body.x, body.z)
+            body.x = spot.first; body.z = spot.second
+            body.prevX = body.x; body.prevZ = body.z
+        }
         // Tray + rack against their caps.
         while (game.ingots.total > game.trayCap) {
             var reduced = false

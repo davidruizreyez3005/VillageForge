@@ -1,13 +1,15 @@
 package com.villageforge.config
 
 import kotlin.math.abs
+import kotlin.math.cos
 import kotlin.math.floor
 import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.pow
+import kotlin.math.sin
 
 object BuildInfo {
-    const val VERSION = "3.0"
+    const val VERSION = "3.1"
 }
 
 /**
@@ -132,8 +134,15 @@ object Theme {
 
     val SUN_COLOR = Rgb(1.0f, 0.95f, 0.86f)
     const val SUN_INTENSITY_LUX = 11_000f
-    val SUN_DIRECTION = floatArrayOf(0.55f, -0.72f, 0.42f)
-    val AMBIENT_SKY = Rgb(0.28f, 0.36f, 0.52f)
+    /**
+     * v3.1 — the key light now comes from the camera's side (south-east)
+     * instead of the north-west. The old back-lit sun left every face the
+     * player actually sees — building fronts, the canyon's near wall, the
+     * whole south-eastern rim — in ambient-only shade, which read as a dark
+     * ring around the map. Front-lit is the classic isometric key.
+     */
+    val SUN_DIRECTION = floatArrayOf(-0.35f, -0.71f, -0.61f)
+    val AMBIENT_SKY = Rgb(0.38f, 0.45f, 0.58f)
     val SKY_COLOR = Rgb(0.52f, 0.68f, 0.84f)
 
     /** v3.0 — the prototype camera: fixed orthographic, yaw 45°, pitch ≈32°. */
@@ -328,8 +337,10 @@ object Progression {
 
 /**
  * Day/night: one full day is 480 seconds; a session opens mid-morning at 30%.
- * Night never goes fully dark — the light floor sits at 0.42 so the game is
- * readable in daylight conditions on a dim phone screen.
+ * v3.1 — the night floor rises from the prototype's 0.42 to 0.55: on-device
+ * play on a dim phone screen found moonlit nights still too hard to read.
+ * Sky, ambient, and torch timing all brightened to match — a flagged,
+ * deliberate deviation from spec §13.3 driven by player feedback.
  */
 object DayNight {
     const val CYCLE_SECONDS = 480f
@@ -339,20 +350,20 @@ object DayNight {
     const val DUSK_END = 0.80f
 
     const val DAY_SUN_LUX = 11_000f
-    const val NIGHT_SUN_LUX = 1_000f
-    const val DAY_AMBIENT_LUX = 3_000f
-    const val NIGHT_AMBIENT_LUX = 2_600f
+    const val NIGHT_SUN_LUX = 1_200f
+    const val DAY_AMBIENT_LUX = 4_200f
+    const val NIGHT_AMBIENT_LUX = 3_600f
 
-    /** Spec §13.3 — the night floor. */
-    const val MOONLIGHT = 0.42f
+    /** v3.1 — the night floor, raised from spec's 0.42 for phone readability. */
+    const val MOONLIGHT = 0.55f
     const val GOLDEN = 0.55f
 
     val DAY_SKY = Theme.Rgb(0.52f, 0.68f, 0.84f)
     val DUSK_SKY = Theme.Rgb(0.84f, 0.48f, 0.34f)
-    val NIGHT_SKY = Theme.Rgb(0.14f, 0.18f, 0.30f)
+    val NIGHT_SKY = Theme.Rgb(0.22f, 0.27f, 0.42f)
     val DAY_SUN = Theme.Rgb(1.0f, 0.95f, 0.86f)
     val DUSK_SUN = Theme.Rgb(1.0f, 0.52f, 0.22f)
-    val NIGHT_SUN = Theme.Rgb(0.44f, 0.54f, 0.78f)
+    val NIGHT_SUN = Theme.Rgb(0.50f, 0.58f, 0.80f)
 
     /** 0 = full day, 1 = deep night. Drives lantern/fire glow and torches. */
     fun nightness(t: Float): Float = when {
@@ -372,12 +383,12 @@ object DayNight {
      */
     fun merchantsOpen(t: Float): Boolean = !isNightish(t)
 
-    /** Carried torches: on as dusk gathers, full by deep night. */
+    /** Carried torches: on as dusk gathers, full by deep night (v3.1: earlier). */
     fun torchLevel(t: Float): Float =
         ((nightness(t) - TORCH_NIGHTNESS_START) / (TORCH_NIGHTNESS_FULL - TORCH_NIGHTNESS_START)).coerceIn(0f, 1f)
 
-    const val TORCH_NIGHTNESS_START = 0.30f
-    const val TORCH_NIGHTNESS_FULL = 0.62f
+    const val TORCH_NIGHTNESS_START = 0.22f
+    const val TORCH_NIGHTNESS_FULL = 0.55f
 }
 
 /**
@@ -393,17 +404,56 @@ object Wood {
 }
 
 object WorldLayout {
-    const val VALLEY_WIDTH = 60f
-    const val VALLEY_Z_MAX = 20f
-    const val VALLEY_Z_MIN = -20f
-    const val CANYON_Z_MIN = -46f
-    const val CANYON_Z_MAX = -25f
+    /**
+     * v3.1 — The Wider Valley. The valley floor nearly doubled (88 wide,
+     * 42 deep) and the North Cut was pulled eight units south so the whole
+     * mining belt hugs the town instead of hiding in the far corner. The
+     * camera and the invisible barriers keep play inside the curated bowl;
+     * beyond it the terrain rises into backdrop mountains on every side.
+     */
+    const val VALLEY_WIDTH = 88f
+    const val VALLEY_Z_MAX = 30f
+    const val VALLEY_Z_MIN = -12f
+    const val CANYON_Z_MIN = -38f
+    const val CANYON_Z_MAX = -17f
     const val CANYON_HALF_W = 13f
     const val PASS_HALF_W = 7.5f
-    const val PASS_Z_MIN = -25f
-    const val PASS_Z_MAX = -19f
+    const val PASS_Z_MIN = -17f
+    const val PASS_Z_MAX = -11f
     const val NORTH_Z = VALLEY_Z_MIN
     const val TERRAIN_CELL = 1.5f
+
+    /** v3.1 — the visual bowl: ground exists from here, rims rising past it. */
+    const val TERRAIN_X_MIN = -58f
+    const val TERRAIN_X_MAX = 60f
+    const val TERRAIN_Z_MIN = -54f
+    const val TERRAIN_Z_MAX = 46f
+
+    /**
+     * v3.1 — the invisible barrier. Slopes steeper than this read as walls:
+     * the walkable world is the valley floor plus the mine corridors, and
+     * every rim mountain politely refuses to be climbed.
+     */
+    const val WALK_MAX_GROUND = 2.0f
+
+    fun isWalkable(x: Float, z: Float): Boolean = groundHeight(x, z) <= WALK_MAX_GROUND
+
+    /**
+     * v3.1 — nearest standable spot to (x, z): a small spiral search used on
+     * save restore so a body parked on now-steeper ground snaps down safe.
+     */
+    fun nearestWalkable(x: Float, z: Float): Pair<Float, Float> {
+        if (isWalkable(x, z)) return x to z
+        for (r in 1..5) {
+            for (i in 0 until 8) {
+                val a = i * 0.78539816f + r * 0.3f
+                val nx = x + cos(a) * r
+                val nz = z + sin(a) * r
+                if (isWalkable(nx, nz)) return nx to nz
+            }
+        }
+        return SPAWN_X to SPAWN_Z
+    }
 
     // The Crystal Hollow: a westward side-canyon full of crystal veins.
     const val HOLLOW_X_MIN = -54f
@@ -429,10 +479,10 @@ object WorldLayout {
     const val SAWMILL_X = -24f
     const val SAWMILL_Z = 8f
 
-    /** Playable ground spans used by camera clamps and tap projection. */
+    /** Playable ground spans used by tap projection and scatter. */
     const val PLAY_X_MIN = HOLLOW_X_MIN + 1f
     const val PLAY_X_MAX = VALLEY_WIDTH / 2f - 1f
-    const val PLAY_Z_MIN = CANYON_Z_MIN + 1f
+    const val PLAY_Z_MIN = minOf(CANYON_Z_MIN, HOLLOW_Z_MIN) + 1f
     const val PLAY_Z_MAX = VALLEY_Z_MAX - 1f
 
     const val SPAWN_X = 0f
@@ -451,7 +501,7 @@ object WorldLayout {
     /** The second anvil — Lane B, the Master Smith's. */
     const val ANVIL2_X = 4.6f
     const val ANVIL2_Z = 6.4f
-    const val GATE_Z = -19.2f
+    const val GATE_Z = -11.2f
     /** The south road customers arrive on. */
     const val ROAD_SOUTH_X = 0f
     const val ROAD_SOUTH_Z = 16.5f
@@ -465,6 +515,7 @@ object WorldLayout {
      * v3.0 vein layout — the two mirrored cuts of the prototype, plus the
      * Crystal Hollow pocket. The East Cut's rocks exist from the start but
      * only answer to the Pit Master's crew (and open to everyone once hired).
+     * v3.1: the North Cut veins moved eight units south with their canyon.
      */
     val rocks: List<RockSpawn> = listOf(
         // South valley starter veins (North Cut's nearest face)
@@ -472,15 +523,15 @@ object WorldLayout {
         RockSpawn(Ore.COPPER, -6f, 10f, MineField.NORTH), RockSpawn(Ore.COPPER, 6f, 10f, MineField.NORTH),
         RockSpawn(Ore.COPPER, 0f, 17f, MineField.NORTH),
         // The North Cut (main canyon): the primary mine, always open
-        RockSpawn(Ore.IRON, -6f, -27f, MineField.NORTH), RockSpawn(Ore.IRON, 5f, -29f, MineField.NORTH),
-        RockSpawn(Ore.IRON, -9f, -33f, MineField.NORTH), RockSpawn(Ore.IRON, 10f, -31f, MineField.NORTH),
-        RockSpawn(Ore.COPPER, -2f, -26.5f, MineField.NORTH), RockSpawn(Ore.COPPER, 8f, -27.5f, MineField.NORTH),
-        RockSpawn(Ore.COPPER, -6f, -30f, MineField.NORTH), RockSpawn(Ore.COPPER, 5f, -33f, MineField.NORTH),
-        RockSpawn(Ore.SILVER, -2f, -38f, MineField.NORTH), RockSpawn(Ore.SILVER, 9f, -28f, MineField.NORTH),
-        RockSpawn(Ore.SILVER, -6f, -38.5f, MineField.NORTH), RockSpawn(Ore.SILVER, 2f, -34f, MineField.NORTH),
-        RockSpawn(Ore.GOLD, -9f, -36f, MineField.NORTH), RockSpawn(Ore.GOLD, 0f, -41f, MineField.NORTH),
-        RockSpawn(Ore.GOLD, 7f, -37f, MineField.NORTH),
-        RockSpawn(Ore.MYTHRIL, -5f, -42f, MineField.NORTH), RockSpawn(Ore.MYTHRIL, 10f, -34f, MineField.NORTH),
+        RockSpawn(Ore.IRON, -6f, -19f, MineField.NORTH), RockSpawn(Ore.IRON, 5f, -21f, MineField.NORTH),
+        RockSpawn(Ore.IRON, -9f, -25f, MineField.NORTH), RockSpawn(Ore.IRON, 10f, -23f, MineField.NORTH),
+        RockSpawn(Ore.COPPER, -2f, -18.5f, MineField.NORTH), RockSpawn(Ore.COPPER, 8f, -19.5f, MineField.NORTH),
+        RockSpawn(Ore.COPPER, -6f, -22f, MineField.NORTH), RockSpawn(Ore.COPPER, 5f, -25f, MineField.NORTH),
+        RockSpawn(Ore.SILVER, -2f, -30f, MineField.NORTH), RockSpawn(Ore.SILVER, 9f, -20f, MineField.NORTH),
+        RockSpawn(Ore.SILVER, -6f, -30.5f, MineField.NORTH), RockSpawn(Ore.SILVER, 2f, -26f, MineField.NORTH),
+        RockSpawn(Ore.GOLD, -9f, -28f, MineField.NORTH), RockSpawn(Ore.GOLD, 0f, -33f, MineField.NORTH),
+        RockSpawn(Ore.GOLD, 7f, -29f, MineField.NORTH),
+        RockSpawn(Ore.MYTHRIL, -5f, -34f, MineField.NORTH), RockSpawn(Ore.MYTHRIL, 10f, -26f, MineField.NORTH),
         // The East Cut (opens with the Pit Master)
         RockSpawn(Ore.IRON, 21f, -11f, MineField.EAST), RockSpawn(Ore.IRON, 27f, -6f, MineField.EAST),
         RockSpawn(Ore.COPPER, 22.5f, -5.5f, MineField.EAST), RockSpawn(Ore.COPPER, 27.5f, -11.5f, MineField.EAST),
@@ -499,13 +550,13 @@ object WorldLayout {
         RockSpawn(Ore.MYTHRIL, -52f, -43f, MineField.HOLLOW),
     )
 
-    const val TREE_COUNT = 40
+    const val TREE_COUNT = 52
     const val TREE_SEED = 1337
 
-    /** Hand-placed pines inside the canyon — scenery, not timber. */
+    /** Hand-placed pines inside the canyon — scenery, not timber. v3.1: moved south with the canyon. */
     val canyonPines: List<Pair<Float, Float>> = listOf(
-        -11f to -27f, 11.5f to -27.5f, -9f to -34f, 10.5f to -40f,
-        -11.5f to -42f, 4f to -44f, 11f to -44f, -4f to -26.5f, 8f to -31f,
+        -11f to -19f, 11.5f to -19.5f, -9f to -26f, 10.5f to -32f,
+        -11.5f to -34f, 4f to -36f, 11f to -36f, -4f to -18.5f, 8f to -23f,
     )
 
     /** Glowing crystal clusters scattered around the hollow floor and walls. */
@@ -562,9 +613,9 @@ object WorldLayout {
 
     /** Where each cut keeps its stockpile (carriers service these). */
     fun stockpileOf(field: MineField): Pair<Float, Float> = when (field) {
-        MineField.NORTH -> 0f to GATE_Z + 1.5f
-        MineField.EAST -> EAST_SIGN_X to EAST_SIGN_Z + 1.5f
-        MineField.HOLLOW -> (HOLLOW_X_MIN + HOLLOW_X_MAX) / 2f to HOLLOW_Z_MAX + 1.5f
+        MineField.NORTH -> 0f to CANYON_Z_MAX - 1.5f       // at the canyon mouth, on the carrier trail
+        MineField.EAST -> EAST_SIGN_X to EAST_Z_MAX + 1.2f // at the cut mouth, on the flat
+        MineField.HOLLOW -> (HOLLOW_X_MIN + HOLLOW_X_MAX) / 2f to HOLLOW_Z_MAX - 2f
     }
 
     /** Outside distance from the canyon+pass+hollow corridor; 0 inside. */
@@ -632,8 +683,8 @@ object WorldLayout {
         else -> ZONE_VALLEY
     }
 
-    private val LINK_WEST_MOUTH = -31f to -38.5f
-    private val LINK_EAST_MOUTH = -17f to -38.5f
+    private val LINK_WEST_MOUTH = -31f to -36f
+    private val LINK_EAST_MOUTH = -17f to -36f
     private val EAST_MOUTH = 18.5f to -7.5f
 
     /**
@@ -647,8 +698,8 @@ object WorldLayout {
         if (from == to) return emptyList()
         val legs = ArrayList<Pair<Float, Float>>(4)
         val px = toX.coerceIn(-4.5f, 4.5f)  // bias the pass crossing toward the destination
-        fun toValley() { legs.add(px to -21.5f) }
-        fun toCanyon() { legs.add(px to -26.5f) }
+        fun toValley() { legs.add(px to (PASS_Z_MIN + PASS_Z_MAX) / 2f) }
+        fun toCanyon() { legs.add(px to CANYON_Z_MAX - 1.5f) }
         when (from) {
             ZONE_VALLEY -> when (to) {
                 ZONE_CANYON -> { toValley(); toCanyon() }
