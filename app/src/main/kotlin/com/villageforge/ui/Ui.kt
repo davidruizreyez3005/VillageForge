@@ -67,22 +67,21 @@ fun oreName(ore: com.villageforge.config.Ore): String =
     ore.name.lowercase().replaceFirstChar { it.uppercase() }
 
 fun oreColor(ore: com.villageforge.config.Ore): Int = when (ore) {
-    com.villageforge.config.Ore.COPPER -> 0xFFE0955C.toInt()
-    com.villageforge.config.Ore.TIN -> 0xFFD7DEE6.toInt()
-    com.villageforge.config.Ore.COAL -> 0xFFA8ADB3.toInt()
     com.villageforge.config.Ore.IRON -> 0xFFB7C1D4.toInt()
+    com.villageforge.config.Ore.COPPER -> 0xFFE0955C.toInt()
     com.villageforge.config.Ore.SILVER -> 0xFFE8ECF2.toInt()
     com.villageforge.config.Ore.GOLD -> 0xFFF5CF3D.toInt()
+    com.villageforge.config.Ore.MYTHRIL -> 0xFF9FB4E8.toInt()
     com.villageforge.config.Ore.CRYSTAL -> 0xFF8FE0E8.toInt()
 }
 
 fun metalColor(metal: com.villageforge.config.Metal): Int = when (metal) {
-    com.villageforge.config.Metal.COPPER_INGOT -> 0xFFE0955C.toInt()
-    com.villageforge.config.Metal.TIN_INGOT -> 0xFFD7DEE6.toInt()
-    com.villageforge.config.Metal.BRONZE_INGOT -> 0xFFD9A552.toInt()
     com.villageforge.config.Metal.IRON_INGOT -> 0xFFB7C1D4.toInt()
+    com.villageforge.config.Metal.COPPER_INGOT -> 0xFFE0955C.toInt()
     com.villageforge.config.Metal.SILVER_INGOT -> 0xFFE8ECF2.toInt()
     com.villageforge.config.Metal.GOLD_INGOT -> 0xFFF5CF3D.toInt()
+    com.villageforge.config.Metal.MYTHRIL_INGOT -> 0xFF9FB4E8.toInt()
+    com.villageforge.config.Metal.CRYSTAL_INGOT -> 0xFF8FE0E8.toInt()
 }
 
 /** Bottom sheet shell: dim scrim, rounded panel, title + close, scrollable body. */

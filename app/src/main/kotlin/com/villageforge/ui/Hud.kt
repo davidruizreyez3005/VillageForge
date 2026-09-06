@@ -42,7 +42,6 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import com.villageforge.config.Buildings
 import com.villageforge.config.DayNight
 import com.villageforge.config.LightingProbe
 import com.villageforge.config.Ore
@@ -113,15 +112,16 @@ fun HudScreen(game: GameState, bus: EventBus, rig: CameraRig, save: SaveManager)
     val carry by game.carryFlow.collectAsState()
     val stock by game.stockpileFlow.collectAsState()
     val coins by game.coinsFlow.collectAsState()
-    val binOwned by game.binFlow.collectAsState()
     val upgrades by game.upgradeFlow.collectAsState()
     val soundOn by game.sfxFlow.collectAsState()
     val ingots by game.ingotFlow.collectAsState()
     val items by game.itemFlow.collectAsState()
     val forge by game.forgeFlow.collectAsState()
+    val sawmill by game.sawmillFlow.collectAsState()
+    val crew by game.crewFlow.collectAsState()
+    val materials by game.materialsFlow.collectAsState()
     val quest by game.questFlow.collectAsState()
     val level by game.levelFlow.collectAsState()
-    val miners by game.minerFlow.collectAsState()
     val time by game.timeFlow.collectAsState()
     val musicOn by game.musicFlow.collectAsState()
     val orders by game.ordersFlow.collectAsState()
@@ -166,20 +166,16 @@ fun HudScreen(game: GameState, bus: EventBus, rig: CameraRig, save: SaveManager)
             )
         }
 
-        CarryPanel(carry, stock, binOwned, ingots, items, Modifier.align(Alignment.BottomStart))
+        CarryPanel(carry, stock, ingots, items, Modifier.align(Alignment.BottomStart))
 
         BottomBar(sheet != null, onSelect = { s -> sheet = if (sheet == s) null else s }, Modifier.align(Alignment.BottomCenter))
 
-        if (!binOwned && !forge.furnaceOwned) {
-            BuyPanel("Storage Bin", Buildings.BIN_COST, coins,
-                { game.enqueue(GameState.Command.BuyBin) }, Modifier.align(Alignment.BottomEnd))
-        }
-
         when (sheet) {
-            Sheet.SHOP -> ShopSheet(game, coins, binOwned, upgrades, miners, { sheet = null })
-            Sheet.FORGE -> ForgeSheet(game, coins, forge, ingots, items, carry, stock, { sheet = null })
+            Sheet.SHOP -> ShopSheet(game, coins, upgrades, { sheet = null })
+            Sheet.CREW -> CrewSheet(game, crew, coins, { sheet = null })
+            Sheet.FORGE -> ForgeSheet(game, forge, ingots, items, carry, stock, sawmill, { sheet = null })
             Sheet.MEDALS -> MedalsSheet(game, { sheet = null })
-            Sheet.TOWN -> TownSheet(game, town, coins, { sheet = null })
+            Sheet.TOWN -> TownSheet(game, town, materials, coins, { sheet = null })
             Sheet.ORDERS -> OrdersSheet(orders, { sheet = null })
             Sheet.QUESTS -> QuestSheet(
                 quest,
@@ -188,13 +184,16 @@ fun HudScreen(game: GameState, bus: EventBus, rig: CameraRig, save: SaveManager)
                     coinsEarned = game.stats.coinsEarnedTotal,
                     ingotsSmelted = game.stats.ingotsSmeltedTotal(),
                     itemsCrafted = game.stats.itemsCraftedTotal(),
-                    minersHired = miners.count,
+                    crewSize = crew.members.size,
                     playSeconds = game.stats.playSeconds.toInt(),
                     renownEarned = game.stats.renownEarned,
                     commissionsFilled = game.stats.commissionsFilled,
                     prestige = town.prestige,
                     residents = town.residents,
                     rainMinutes = (game.stats.rainSeconds / 60f).toInt(),
+                    timberFelled = game.stats.timberFelled,
+                    planksSawn = game.stats.planksSawn,
+                    wagesPaid = game.stats.wagesPaid,
                 ),
                 { sheet = null },
             )
@@ -373,7 +372,9 @@ private fun BottomBar(anyOpen: Boolean, onSelect: (Sheet) -> Unit, modifier: Mod
     ) {
         BarButton("🔨", "Forge", anyOpen) { onSelect(Sheet.FORGE) }
         Spacer(Modifier.width(6.dp))
-        BarButton("🛒", "Shop", anyOpen) { onSelect(Sheet.SHOP) }
+        BarButton("⬆️", "Upgrades", anyOpen) { onSelect(Sheet.SHOP) }
+        Spacer(Modifier.width(6.dp))
+        BarButton("👷", "Crew", anyOpen) { onSelect(Sheet.CREW) }
         Spacer(Modifier.width(6.dp))
         BarButton("🏘️", "Town", anyOpen) { onSelect(Sheet.TOWN) }
         Spacer(Modifier.width(6.dp))
@@ -403,31 +404,9 @@ private fun BarButton(glyph: String, label: String, dim: Boolean, onClick: () ->
 // ---- Carry panel ---------------------------------------------------------
 
 @Composable
-private fun BuyPanel(label: String, cost: Int, coins: Int, onBuy: () -> Unit, modifier: Modifier) {
-    val affordable = coins >= cost
-    Box(
-        modifier
-            .windowInsetsPadding(WindowInsets.safeDrawing)
-            .padding(12.dp)
-            .background(Color(UiColors.PANEL), RoundedCornerShape(10.dp))
-            .clickable(enabled = affordable) { onBuy() }
-            .padding(horizontal = 14.dp, vertical = 8.dp)
-    ) {
-        Column {
-            BasicText(label, style = TextStyle(color = Color(UiColors.HEADER), fontSize = 15.sp, fontWeight = FontWeight.Bold))
-            BasicText(
-                if (affordable) "Buy · ${cost} c" else "Need ${cost} c",
-                style = TextStyle(color = Color(if (affordable) UiColors.COIN_TEXT else UiColors.DIM), fontSize = 13.sp),
-            )
-        }
-    }
-}
-
-@Composable
 private fun CarryPanel(
     carry: GameState.CarrySnapshot,
     stock: GameState.StockpileSnapshot,
-    binOwned: Boolean,
     ingots: GameState.IngotSnapshot,
     items: GameState.ItemSnapshot,
     modifier: Modifier,
@@ -447,6 +426,13 @@ private fun CarryPanel(
         ProgressBar(carry.total.toFloat() / carry.capacity.coerceAtLeast(1), UiColors.COIN)
         Spacer(Modifier.height(6.dp))
         OreRows(carry.oreCounts)
+        if (carry.timber > 0) {
+            BasicText(
+                "Timber ×${carry.timber}",
+                style = TextStyle(color = Color(UiColors.TEXT), fontSize = 12.sp, fontWeight = FontWeight.Bold),
+                modifier = Modifier.padding(top = 2.dp),
+            )
+        }
         if (ingots.total > 0 || items.total > 0) {
             Spacer(Modifier.height(5.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -461,14 +447,12 @@ private fun CarryPanel(
                 )
             }
         }
-        if (binOwned) {
-            Spacer(Modifier.height(6.dp))
-            BasicText(
-                "Stockpile ${stock.total}",
-                style = TextStyle(color = Color(UiColors.HEADER), fontSize = 12.sp, fontWeight = FontWeight.Bold),
-            )
-            StockOreRows(stock.oreCounts)
-        }
+        Spacer(Modifier.height(6.dp))
+        BasicText(
+            "Yard bins ${stock.total}",
+            style = TextStyle(color = Color(UiColors.HEADER), fontSize = 12.sp, fontWeight = FontWeight.Bold),
+        )
+        StockOreRows(stock.oreCounts)
     }
 }
 

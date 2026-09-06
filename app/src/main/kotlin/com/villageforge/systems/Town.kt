@@ -1,5 +1,6 @@
 package com.villageforge.systems
 
+import com.villageforge.config.DayNight
 import com.villageforge.config.Item
 import com.villageforge.config.PlayerConfig
 import com.villageforge.config.Town
@@ -12,16 +13,19 @@ import kotlin.math.hypot
 import kotlin.random.Random
 
 /**
- * v2.2 — the town layer, blended from the original web build.
+ * v3.0 — the town layer, aligned with the prototype:
  *
- * CommissionSystem places orders at the market (filled BY SELLING),
- * VillageSystem owns the build slots and prestige, WeatherSystem runs the
- * rain schedule, and TownsfolkSystem keeps the residents' hours.
+ * CommissionSystem places orders at the market (filled BY SELLING, from any
+ * source). The board opens at 12 renown; simultaneous slots scale 1/2/3 at
+ * 0/45/110; the first order waits 40s after unlock, then arrivals every
+ * 65–125s; customers keep the Merchant's hours and don't set out in the
+ * rain. VillageSystem owns the build ladder: both renown AND prestige gates,
+ * the one-press whole bill (coins + materials), and the power budget.
  */
 class CommissionSystem(private val bus: EventBus) {
 
     private val rng = Random(2028)
-    private var spawnClock = 8f
+    private var spawnClock = Town.FIRST_ORDER_GRACE
     private var nextId = 1
 
     fun update(gs: GameState, dt: Float) {
@@ -47,13 +51,19 @@ class CommissionSystem(private val bus: EventBus) {
             if (c.filled >= c.needed) complete(gs, c)
         }
 
-        // Walk-in customers place new orders while the board has room.
-        if (boardOpen && gs.commissions.size < cap) {
+        // Walk-in customers place new orders while the board has room, the
+        // market is open, and it isn't raining (orders already placed wait it out).
+        val marketOpen = DayNight.merchantsOpen(gs.timeOfDay)
+        val dry = gs.weatherRain < 0.35f
+        if (boardOpen && marketOpen && dry && gs.commissions.size < cap) {
             spawnClock -= dt
             if (spawnClock <= 0f) {
-                spawnClock = 18f + rng.nextFloat() * 26f
+                spawnClock = Town.ARRIVE_MIN + rng.nextFloat() * (Town.ARRIVE_MAX - Town.ARRIVE_MIN)
                 tryPlace(gs)
             }
+        } else if (!boardOpen) {
+            // The grace delay restarts relative to unlock.
+            spawnClock = Town.FIRST_ORDER_GRACE
         }
 
         // Departed customers finish their walk to the road edge, then vanish.
@@ -66,9 +76,21 @@ class CommissionSystem(private val bus: EventBus) {
     }
 
     private fun tryPlace(gs: GameState) {
-        val craftable = Town.commissions.filter { Town.craftableAt(it.item, gs.pickTier) }
+        // Customers only ask for goods whose ore is already uncovered,
+        // weighted toward the finer goods the town has grown into.
+        val craftable = Town.commissions.filter { Town.craftableAt(it.item, gs.pickLevel) }
         if (craftable.isEmpty()) return
-        val def = craftable[rng.nextInt(craftable.size)]
+        val weights = craftable.map { def ->
+            val value = def.item.sell
+            1 + Town.renownWeight(value)
+        }
+        var pick = rng.nextInt(weights.sum())
+        var chosen = craftable[0]
+        for (i in craftable.indices) {
+            pick -= weights[i]
+            if (pick < 0) { chosen = craftable[i]; break }
+        }
+        val def = chosen
         val needed = def.min + rng.nextInt(def.max - def.min + 1)
         val bounty = (needed * def.item.sell * def.coinMul).toInt().coerceAtLeast(5)
         val c = GameState.Commission(
@@ -76,7 +98,7 @@ class CommissionSystem(private val bus: EventBus) {
             remain = def.secs, bounty = bounty, renown = def.renown, honour = def.honour,
         )
         gs.commissions.add(c)
-        spawnCustomer(c)
+        spawnCustomer(gs, c)
         bus.orderPlaced.tryEmit(EventBus.OrderPlaced(def.item.label, needed))
         bus.sfx.tryEmit(EventBus.Sfx(SfxId.ORDER, 0.95f))
         bus.notices.tryEmit(
@@ -108,11 +130,22 @@ class CommissionSystem(private val bus: EventBus) {
         )
     }
 
-    private fun spawnCustomer(c: GameState.Commission) {
+    /**
+     * Customers come from finished homes (each cottage is a customer's front
+     * door); with none yet, they walk in from the map edge.
+     */
+    private fun spawnCustomer(gs: GameState, c: GameState.Commission) {
         val body = c.customer
         body.moveSpeedBonus = Town.WALK_SPEED - PlayerConfig.MOVE_SPEED
-        body.x = Town.ROAD_EDGE_X
-        body.z = Town.ROAD_EDGE_Z
+        val doors = Town.homeDoors(gs.villageSlots)
+        if (doors.isNotEmpty()) {
+            val home = doors[c.id % doors.size]
+            body.x = home.first
+            body.z = home.second
+        } else {
+            body.x = Town.ROAD_EDGE_X
+            body.z = Town.ROAD_EDGE_Z
+        }
         body.prevX = body.x
         body.prevZ = body.z
         body.animState = AnimState.WALK
@@ -132,13 +165,14 @@ class CommissionSystem(private val bus: EventBus) {
     /** Puts loaded commissions' customers back on the road (after a save load). */
     fun restoreWalkers(gs: GameState) {
         gs.departingCustomers.clear()
-        for (c in gs.commissions) spawnCustomer(c)
+        for (c in gs.commissions) spawnCustomer(gs, c)
     }
 
     companion object {
         /**
          * Called by Economy on every sale: units of [item] that reached the
-         * market count against every live order for that good.
+         * market count against every live order for that good — from any
+         * source: the player's carry, the Merchant, or offline simulation.
          */
         fun onSold(bus: EventBus, gs: GameState, item: Item, count: Int) {
             var changed = false
@@ -146,9 +180,6 @@ class CommissionSystem(private val bus: EventBus) {
                 if (c.item != item || c.filled >= c.needed) continue
                 c.filled = (c.filled + count).coerceAtMost(c.needed)
                 changed = true
-                if (c.filled >= c.needed) {
-                    // completed next update() tick (payout centralized there)
-                }
             }
             if (changed) bus.sfx.tryEmit(EventBus.Sfx(SfxId.ORDER, 1.15f))
         }
@@ -159,38 +190,81 @@ private fun levelsEvent(bus: EventBus, gs: GameState, levels: Int) {
     if (levels > 0) bus.levelUp.tryEmit(EventBus.LevelUp(gs.level))
 }
 
-/** Owns the build slots: one press quotes the whole bill, supplies included. */
+/**
+ * Owns the build slots: one press quotes the whole bill — coins AND
+ * materials — all-or-nothing. Gated by renown AND prestige, and machines
+ * cannot be built without spare power capacity.
+ */
 class VillageSystem(private val bus: EventBus) {
 
     fun tryBuild(gs: GameState, slotIndex: Int) {
         val slot = Town.slots.getOrNull(slotIndex) ?: return
         val stage = gs.villageSlots[slotIndex]
         if (stage >= slot.maxStage) return
-        if (gs.renown < slot.renownReq) {
-            bus.notices.tryEmit(EventBus.Notice("Needs ${slot.renownReq} renown", EventBus.COLOR_WARN, slot.x, slot.z))
+        val next = slot.stages[stage]
+        if (gs.renown < next.renownReq || gs.prestige() < next.prestigeReq) {
+            bus.notices.tryEmit(
+                EventBus.Notice(
+                    "Needs ${next.renownReq} renown · ${next.prestigeReq} prestige",
+                    EventBus.COLOR_WARN, slot.x, slot.z,
+                )
+            )
             return
         }
-        val bill = slot.bill(stage)
-        if (gs.coins < bill) {
-            bus.notices.tryEmit(EventBus.Notice("Need $bill c", EventBus.COLOR_WARN, slot.x, slot.z))
+        val isMachine = slot.kind == Town.SlotKind.BELLOWS_HOUSE || slot.kind == Town.SlotKind.TRIP_HAMMER
+        if (isMachine && Town.powerGenerated(gs.villageSlots) - Town.powerDrawn(gs.villageSlots) < 1) {
+            bus.notices.tryEmit(
+                EventBus.Notice("No spare water power — build a millrace first", EventBus.COLOR_WARN, slot.x, slot.z)
+            )
             return
         }
-        gs.coins -= bill
+        // The whole bill, one press: coins + every material, all-or-nothing.
+        val coinBill = slot.stages[stage].coin
+        if (gs.coins < coinBill) {
+            bus.notices.tryEmit(EventBus.Notice("Need $coinBill c", EventBus.COLOR_WARN, slot.x, slot.z))
+            return
+        }
+        for ((material, need) in next.supplies) {
+            if (gs.materials[material.ordinal] < need) {
+                bus.notices.tryEmit(
+                    EventBus.Notice("Short ${need - gs.materials[material.ordinal]} ${material.label}", EventBus.COLOR_WARN, slot.x, slot.z)
+                )
+                return
+            }
+        }
+        gs.coins -= coinBill
+        for ((material, need) in next.supplies) gs.materials[material.ordinal] -= need
         gs.villageSlots[slotIndex] = stage + 1
         gs.stats.buildStages++
         val complete = gs.villageSlots[slotIndex] >= slot.maxStage
         bus.sfx.tryEmit(EventBus.Sfx(SfxId.BUY))
         bus.notices.tryEmit(
             EventBus.Notice(
-                if (complete) "${slot.kind.label} raised!" else slot.stages[stage].label,
+                if (complete) "${slot.kind.label} raised!" else next.label,
                 EventBus.COLOR_GOLD, slot.x, slot.z, -30f,
             )
         )
-        bus.villageBuilt.tryEmit(EventBus.VillageBuilt(slot.stages[gs.villageSlots[slotIndex] - 1].label, complete))
+        bus.villageBuilt.tryEmit(EventBus.VillageBuilt(next.label, complete))
         levelsEvent(bus, gs, gs.addXp(40 + 20 * (stage + 1)))
         if (complete && slot.boon != null) {
             bus.sfx.tryEmit(EventBus.Sfx(SfxId.ACHIEVE))
         }
+    }
+
+    /** The material shop: coins buy supplies, renown-gated per material. */
+    fun tryBuyMaterial(gs: GameState, material: Town.Material) {
+        if (gs.renown < material.renownReq) {
+            bus.notices.tryEmit(EventBus.Notice("Needs ${material.renownReq} renown", EventBus.COLOR_WARN, gs.player.x, gs.player.z))
+            return
+        }
+        if (gs.coins < material.price) {
+            bus.notices.tryEmit(EventBus.Notice("Need ${material.price} c", EventBus.COLOR_WARN, gs.player.x, gs.player.z))
+            return
+        }
+        gs.coins -= material.price
+        gs.materials[material.ordinal]++
+        gs.stats.materialsBought++
+        bus.sfx.tryEmit(EventBus.Sfx(SfxId.BUY, 1.1f))
     }
 }
 
@@ -333,9 +407,11 @@ class TownsfolkSystem(private val bus: EventBus) {
             }
             if (gs.villageSlots[farmIdx] >= Town.slots[farmIdx].maxStage) {
                 homes.add(Town.slots[farmIdx].x to Town.slots[farmIdx].z - 1.7f)
+                homes.add(Town.slots[farmIdx].x + 0.9f to Town.slots[farmIdx].z - 1.7f)
             }
             if (gs.villageSlots[chapelIdx] >= Town.slots[chapelIdx].maxStage) {
                 homes.add(Town.slots[chapelIdx].x + 2.2f to Town.slots[chapelIdx].z)
+                homes.add(Town.slots[chapelIdx].x + 2.9f to Town.slots[chapelIdx].z)
             }
             val idx = gs.residents.size
             val home = homes.getOrNull(idx % homes.size.coerceAtLeast(1)) ?: (0f to 8f)

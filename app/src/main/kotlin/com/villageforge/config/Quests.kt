@@ -2,9 +2,9 @@ package com.villageforge.config
 
 /** Progress counters quests can watch. */
 enum class QuestMetric {
-    COPPER_MINED, ORE_SOLD, PICK_TIER, FORGE_BUILT, INGOTS_SMELTED, ITEMS_CRAFTED,
-    MINERS_HIRED, GOLD_SMELTED, STEEL_PICK, CRYSTAL_BLADE, LEVEL, CRYSTAL_PICK, CRYSTAL_MINED,
-    COMMISSIONS_FILLED, PRESTIGE,
+    IRON_MINED, INGOTS_SMELTED, ITEMS_CRAFTED, PICK_LEVEL, CREW_SIZE,
+    SILVER_SMELTED, GOLD_SMELTED, MYTHRIL_SMELTED, CRYSTAL_MINED, COMMISSIONS_FILLED, PRESTIGE,
+    PLANKS_SAWN, EAST_CUT_OPEN, POWER_BUILT,
 }
 
 data class QuestDef(
@@ -18,23 +18,22 @@ data class QuestDef(
 /** A linear chain: one active quest at a time, completed in order. */
 object Quests {
     val all: List<QuestDef> = listOf(
-        QuestDef("First Sparks", "Mine 10 copper ore from the valley rocks.", QuestMetric.COPPER_MINED, 10, 25),
-        QuestDef("Pocket Money", "Sell 30 ore at the trading post.", QuestMetric.ORE_SOLD, 30, 50),
-        QuestDef("Better Tools", "Buy the Copper Pick.", QuestMetric.PICK_TIER, 1, 75),
-        QuestDef("Build the Forge", "Buy the furnace and anvil for your workshop.", QuestMetric.FORGE_BUILT, 1, 150),
-        QuestDef("First Pour", "Smelt 5 ingots in the furnace.", QuestMetric.INGOTS_SMELTED, 5, 120),
-        QuestDef("Handiwork", "Craft your first item at the anvil.", QuestMetric.ITEMS_CRAFTED, 1, 200),
-        QuestDef("Iron Grip", "Buy the Iron Pick.", QuestMetric.PICK_TIER, 3, 400),
-        QuestDef("Hired Help", "Hire a miner to work the valley.", QuestMetric.MINERS_HIRED, 1, 600),
-        QuestDef("Golden Pour", "Smelt 5 gold ingots.", QuestMetric.GOLD_SMELTED, 5, 1500),
-        QuestDef("Steel Resolve", "Buy the Steel Pick.", QuestMetric.STEEL_PICK, 1, 2500),
-        QuestDef("Legend's Edge", "Forge the Crystal Blade.", QuestMetric.CRYSTAL_BLADE, 1, 5000),
-        // v2.1 — the Crystal Hollow opens west of the canyon.
+        QuestDef("First Sparks", "Mine 10 iron ore from the valley rocks.", QuestMetric.IRON_MINED, 10, 25),
+        QuestDef("The Copper Run", "Smelt 5 ingots in the furnace.", QuestMetric.INGOTS_SMELTED, 5, 40),
+        QuestDef("Handiwork", "Hammer out your first knife at the anvil.", QuestMetric.ITEMS_CRAFTED, 1, 60),
+        QuestDef("A Name About Town", "Fill 3 commissions for market customers.", QuestMetric.COMMISSIONS_FILLED, 3, 150),
+        QuestDef("Keener Edges", "Raise Pickaxe Quality to level 3 and uncover silver.", QuestMetric.PICK_LEVEL, 3, 120),
+        QuestDef("Hired Help", "Put two hands on the crew roster.", QuestMetric.CREW_SIZE, 2, 150),
+        QuestDef("Silver Service", "Smelt 5 silver ingots.", QuestMetric.SILVER_SMELTED, 5, 400),
+        QuestDef("Quality Tells", "Raise Pickaxe Quality to level 6 and uncover gold.", QuestMetric.PICK_LEVEL, 6, 600),
         QuestDef("The West Trail", "Follow the lanterns west — find the Crystal Hollow.", QuestMetric.CRYSTAL_MINED, 1, 750),
-        // v2.2 — the town grows up around the workshop.
-        QuestDef("A Name in the Valley", "Fill 3 commissions for market customers.", QuestMetric.COMMISSIONS_FILLED, 3, 1200),
-        QuestDef("Raising the Town", "Grow the village to 40 Prestige.", QuestMetric.PRESTIGE, 40, 2000),
-        QuestDef("Master Smith", "Buy the Crystal Pick.", QuestMetric.CRYSTAL_PICK, 1, 10000),
+        QuestDef("Raising the Town", "Grow the village to 40 prestige.", QuestMetric.PRESTIGE, 40, 1200),
+        QuestDef("Master's Metal", "Smelt 5 mythril ingots.", QuestMetric.MYTHRIL_SMELTED, 5, 2000),
+        QuestDef("The Deepest Vein", "Raise Pickaxe Quality to its maximum.", QuestMetric.PICK_LEVEL, UpgradeType.PICKAXE_QUALITY.maxLevel, 3000),
+        QuestDef("Timber!", "Saw 20 planks at the mill.", QuestMetric.PLANKS_SAWN, 20, 800),
+        QuestDef("Water Power", "Complete a millrace and hang its wheel.", QuestMetric.POWER_BUILT, 1, 1500),
+        QuestDef("The East Cut", "Hire the Pit Master and open the second mine.", QuestMetric.EAST_CUT_OPEN, 1, 2500),
+        QuestDef("A Village Built", "Grow the village to the full 172 prestige.", QuestMetric.PRESTIGE, Town.FULL_VILLAGE_PRESTIGE, 10000),
     )
 
     fun isComplete(index: Int): Boolean = index >= all.size

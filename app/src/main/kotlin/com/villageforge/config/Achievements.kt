@@ -2,11 +2,11 @@ package com.villageforge.config
 
 import com.villageforge.state.GameState
 
-/**
- * v2.1 medal board. Achievements are checked by [com.villageforge.systems.AchievementSystem]
- * at 10 Hz; each unlock pays a coin reward immediately.
- */
-enum class AchMetric { ORES_MINED, ROCKS_BROKEN, CRYSTAL_MINED, INGOTS_SMELTED, ITEMS_CRAFTED, COINS_EARNED, ORE_SOLD, PICK_TIER, LEVEL, MINERS, QUESTS_DONE, PLAY_MINUTES, OFFLINE_GAIN, FURNACE_OWNED, COMMISSIONS_FILLED, PRESTIGE, RESIDENTS, RAIN_MINUTES }
+enum class AchMetric {
+    ORES_MINED, ROCKS_BROKEN, CRYSTAL_MINED, MYTHRIL_MINED, INGOTS_SMELTED, ITEMS_CRAFTED,
+    COINS_EARNED, PLANKS_SAWN, PICK_LEVEL, LEVEL, CREW, QUESTS_DONE, PLAY_MINUTES,
+    OFFLINE_GAIN, COMMISSIONS_FILLED, PRESTIGE, RESIDENTS, RAIN_MINUTES, WAGES_PAID, POWER,
+}
 
 data class AchievementDef(
     val id: String,
@@ -18,7 +18,6 @@ data class AchievementDef(
 )
 
 object Achievements {
-
     val all: List<AchievementDef> = listOf(
         AchievementDef("first_ore", "First Spark", "Mine your very first chunk of ore.", AchMetric.ORES_MINED, 1, 10),
         AchievementDef("ores_25", "Pebble Pusher", "Mine 25 ore chunks.", AchMetric.ORES_MINED, 25, 30),
@@ -34,47 +33,51 @@ object Achievements {
         AchievementDef("coins_100", "First Coin", "Earn 100 coins in total.", AchMetric.COINS_EARNED, 100, 15),
         AchievementDef("coins_10k", "Coin Collector", "Earn 10,000 coins in total.", AchMetric.COINS_EARNED, 10_000, 250),
         AchievementDef("coins_100k", "Valley Tycoon", "Earn 100,000 coins in total.", AchMetric.COINS_EARNED, 100_000, 2_500),
-        AchievementDef("ore_sold_200", "Trusted Trader", "Sell 200 ore at the trade post.", AchMetric.ORE_SOLD, 200, 120),
-        AchievementDef("steel_pick", "Steel Ambition", "Own the steel pickaxe.", AchMetric.PICK_TIER, Picks.STEEL.ordinal, 150),
-        AchievementDef("crystal_pick", "Crystal Dream", "Own the legendary crystal pickaxe.", AchMetric.PICK_TIER, Picks.CRYSTAL.ordinal, 2_000),
-        AchievementDef("furnace", "Workshop Open", "Build the furnace and anvil.", AchMetric.FURNACE_OWNED, 1, 50),
-        AchievementDef("first_miner", "Hiring Help", "Hire your first miner.", AchMetric.MINERS, 1, 100),
-        AchievementDef("full_crew", "Full Crew", "Hire the maximum crew of ${com.villageforge.config.Miners.HIRE_COSTS.size} miners.", AchMetric.MINERS, com.villageforge.config.Miners.HIRE_COSTS.size, 800),
+        AchievementDef("planks_50", "Timber Yard", "Saw 50 planks at the mill.", AchMetric.PLANKS_SAWN, 50, 150),
+        AchievementDef("pick_3", "Keener Edges", "Uncover silver with Pickaxe Quality 3.", AchMetric.PICK_LEVEL, 3, 100),
+        AchievementDef("pick_6", "Quality Tells", "Uncover gold with Pickaxe Quality 6.", AchMetric.PICK_LEVEL, 6, 400),
+        AchievementDef("pick_8", "The Deepest Vein", "Max Pickaxe Quality and uncover mythril.", AchMetric.PICK_LEVEL, 8, 2_000),
+        AchievementDef("first_miner", "Hiring Help", "Put your first hand on the crew.", AchMetric.CREW, 1, 60),
+        AchievementDef("crew_5", "A Proper Shop", "Five hands on the roster.", AchMetric.CREW, 5, 400),
+        AchievementDef("wages_1k", "An Honest Wage", "Pay 1,000 coins in wages.", AchMetric.WAGES_PAID, 1_000, 250),
         AchievementDef("crystal_50", "Crystal Rush", "Mine 50 crystal ore in the hollow.", AchMetric.CRYSTAL_MINED, 50, 1_000),
+        AchievementDef("mythril_25", "Master's Metal", "Mine 25 mythril ore.", AchMetric.MYTHRIL_MINED, 25, 1_200),
         AchievementDef("level_10", "Seasoned Smith", "Reach level 10.", AchMetric.LEVEL, 10, 300),
         AchievementDef("level_20", "Legend of the Valley", "Reach level 20.", AchMetric.LEVEL, 20, 1_200),
         AchievementDef("quests_done", "Valley Champion", "Complete the whole quest chain.", AchMetric.QUESTS_DONE, 1, 1_500),
         AchievementDef("play_60", "A Fine Evening", "Play for 60 minutes in total.", AchMetric.PLAY_MINUTES, 60, 100),
-        AchievementDef("offline_1k", "Dreams of Idle", "Gather 1,000 ore and ingots while away.", AchMetric.OFFLINE_GAIN, 1_000, 350),
-        // v2.2 — the town layer.
+        AchievementDef("offline_500", "Dreams of Idle", "Gather 500 goods while away.", AchMetric.OFFLINE_GAIN, 500, 350),
         AchievementDef("first_order", "A Name in the Valley", "Fill your first market commission.", AchMetric.COMMISSIONS_FILLED, 1, 60),
         AchievementDef("orders_25", "The Trusted Smith", "Fill 25 commissions for market customers.", AchMetric.COMMISSIONS_FILLED, 25, 900),
         AchievementDef("first_home", "Landlord", "Raise your first cottage.", AchMetric.RESIDENTS, 2, 150),
-        AchievementDef("town_50", "The Village Green", "Grow the village to 50 Prestige.", AchMetric.PRESTIGE, 50, 800),
-        AchievementDef("town_100", "A Proper Town", "Grow the village to 100 Prestige.", AchMetric.PRESTIGE, 100, 2_500),
+        AchievementDef("power_1", "Water Power", "Hang your first millwheel.", AchMetric.POWER, 1, 400),
+        AchievementDef("power_2", "The Wheels Turn", "Complete both millraces.", AchMetric.POWER, 2, 1_200),
+        AchievementDef("town_50", "The Village Green", "Grow the village to 50 prestige.", AchMetric.PRESTIGE, 50, 800),
+        AchievementDef("town_100", "A Proper Town", "Grow the village to 100 prestige.", AchMetric.PRESTIGE, 100, 2_500),
+        AchievementDef("town_172", "A Village Built", "Reach the full 172 prestige of a finished village.", AchMetric.PRESTIGE, 172, 10_000),
         AchievementDef("rain_5", "Petrichor", "Watch the rain fall on the village for 5 minutes in total.", AchMetric.RAIN_MINUTES, 5, 120),
     )
-
-    fun byId(id: String): AchievementDef? = all.firstOrNull { it.id == id }
 
     fun progress(gs: GameState, def: AchievementDef): Int = when (def.metric) {
         AchMetric.ORES_MINED -> gs.stats.oresMined.sum()
         AchMetric.ROCKS_BROKEN -> gs.stats.rocksBroken
         AchMetric.CRYSTAL_MINED -> gs.stats.oresMined[Ore.CRYSTAL.ordinal]
+        AchMetric.MYTHRIL_MINED -> gs.stats.oresMined[Ore.MYTHRIL.ordinal]
         AchMetric.INGOTS_SMELTED -> gs.stats.ingotsSmeltedTotal()
         AchMetric.ITEMS_CRAFTED -> gs.stats.itemsCraftedTotal()
         AchMetric.COINS_EARNED -> gs.stats.coinsEarnedTotal
-        AchMetric.ORE_SOLD -> gs.stats.oreSold
-        AchMetric.PICK_TIER -> gs.pickTier
+        AchMetric.PLANKS_SAWN -> gs.stats.planksSawn
+        AchMetric.PICK_LEVEL -> gs.pickLevel
         AchMetric.LEVEL -> gs.level
-        AchMetric.MINERS -> gs.miners.size
+        AchMetric.CREW -> gs.workers.size
         AchMetric.QUESTS_DONE -> if (Quests.isComplete(gs.questIndex)) 1 else 0
         AchMetric.PLAY_MINUTES -> (gs.stats.playSeconds / 60f).toInt()
         AchMetric.OFFLINE_GAIN -> gs.stats.offlineGains
-        AchMetric.FURNACE_OWNED -> if (gs.furnaceOwned) 1 else 0
         AchMetric.COMMISSIONS_FILLED -> gs.stats.commissionsFilled
         AchMetric.PRESTIGE -> gs.prestige()
-        AchMetric.RESIDENTS -> Town.residentsFor(gs.villageSlots)
+        AchMetric.RESIDENTS -> gs.residents.size
         AchMetric.RAIN_MINUTES -> (gs.stats.rainSeconds / 60f).toInt()
+        AchMetric.WAGES_PAID -> gs.stats.wagesPaid
+        AchMetric.POWER -> Town.powerGenerated(gs.villageSlots)
     }
 }

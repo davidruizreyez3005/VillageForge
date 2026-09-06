@@ -44,6 +44,11 @@ object Transforms {
         out[0]=1f;out[1]=0f;out[2]=0f;out[3]=0f;out[4]=0f;out[5]=1f;out[6]=0f;out[7]=0f
         out[8]=0f;out[9]=0f;out[10]=1f;out[11]=0f;out[12]=tx;out[13]=ty;out[14]=tz;out[15]=1f
     }
+    fun rotationZ(out: FloatArray, radians: Float) {
+        val c = cos(radians); val s = sin(radians)
+        out[0]=c;out[1]=s;out[2]=0f;out[3]=0f;out[4]=-s;out[5]=c;out[6]=0f;out[7]=0f
+        out[8]=0f;out[9]=0f;out[10]=1f;out[11]=0f;out[12]=0f;out[13]=0f;out[14]=0f;out[15]=1f
+    }
     fun rotationX(out: FloatArray, radians: Float) {
         val c = cos(radians); val s = sin(radians)
         out[0]=1f;out[1]=0f;out[2]=0f;out[3]=0f;out[4]=0f;out[5]=c;out[6]=s;out[7]=0f
@@ -820,7 +825,9 @@ class CameraRig(private val engine: Engine) {
     private var focusZ = WorldLayout.SPAWN_Z
     private var targetFocusX = focusX
     private var targetFocusZ = focusZ
-    private var zoom = 15f
+    // v3.0 — spec §4: view height 26 at 1×; `zoom` is HALF that height in
+    // world units, so the range 0.30×–2.2× maps to 3.9..28.6.
+    private var zoom = 13f
     private var targetZoom = zoom
     private val yaw = Math.toRadians(Theme.CAMERA_YAW_DEGREES.toDouble()).toFloat()
     private val pitch = Math.toRadians(Theme.CAMERA_PITCH_DEGREES.toDouble()).toFloat()
@@ -856,7 +863,14 @@ class CameraRig(private val engine: Engine) {
     }
 
     /** Pinch-out (factor > 1) must zoom IN, i.e. shrink the visible world span. */
-    fun zoomBy(factor: Float) { targetZoom = (targetZoom / factor).coerceIn(8f, 36f) }
+    fun zoomBy(factor: Float) { targetZoom = (targetZoom / factor).coerceIn(3.9f, 28.6f) }
+
+    /** Double-tap recenters the camera on the player (spec §5). */
+    fun recenterOnPlayer(x: Float, z: Float) {
+        targetFocusX = x
+        targetFocusZ = z
+        clampFocus()
+    }
 
     fun update(dt: Float) {
         val panLerp = 1f - exp(-12f*dt)

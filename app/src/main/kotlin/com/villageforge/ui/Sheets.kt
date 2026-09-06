@@ -32,13 +32,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.villageforge.config.AchievementDef
 import com.villageforge.config.Achievements
-import com.villageforge.config.Buildings
 import com.villageforge.config.Item
 import com.villageforge.config.Metal
-import com.villageforge.config.Miners
 import com.villageforge.config.Ore
-import com.villageforge.config.Picks
-import com.villageforge.config.Upgrades
+import com.villageforge.config.Role
+import com.villageforge.config.UpgradeType
 import com.villageforge.state.GameState
 
 data class StatsView(
@@ -46,81 +44,45 @@ data class StatsView(
     val coinsEarned: Int,
     val ingotsSmelted: Int,
     val itemsCrafted: Int,
-    val minersHired: Int,
+    val crewSize: Int,
     val playSeconds: Int,
     val renownEarned: Int = 0,
     val commissionsFilled: Int = 0,
     val prestige: Int = 0,
     val residents: Int = 0,
     val rainMinutes: Int = 0,
+    val timberFelled: Int = 0,
+    val planksSawn: Int = 0,
+    val wagesPaid: Int = 0,
 )
 
-// ---- Shop ----------------------------------------------------------------
+// ---- Upgrades (the 16-row tree) -------------------------------------------
 
 @Composable
 fun BoxScope.ShopSheet(
     game: GameState,
     coins: Int,
-    binOwned: Boolean,
-    upgrades: GameState.UpgradeSnapshot,
-    miners: GameState.MinerSnapshot,
+    upgrades: List<GameState.UpgradeView>,
     onClose: () -> Unit,
 ) {
-    SheetShell("Shop", onClose) {
-        val pick = Picks.entries[upgrades.pickTier]
-        val nextPick = Picks.entries.getOrNull(upgrades.pickTier + 1)
-        UpgradeRow(
-            title = "Pickaxe — ${pick.label}",
-            detail = if (nextPick == null) "Max tier · ${pick.damage} damage/swing"
-            else "Next: ${nextPick.label} · ${nextPick.damage} dmg/swing" +
-                if (nextPick.doubleOreChance > 0f) " · +${(nextPick.doubleOreChance * 100).toInt()}% double ore" else "",
-            buyLabel = nextPick?.let { "${it.cost} c" },
-            canBuy = nextPick != null && coins >= nextPick.cost,
-            onBuy = { game.enqueue(GameState.Command.BuyPick) },
-        )
-        UpgradeDivider()
-
-        val bootsMax = upgrades.bootsLevel >= Upgrades.BOOTS_COSTS.size
-        UpgradeRow(
-            title = "Boots — Lv ${upgrades.bootsLevel}/${Upgrades.BOOTS_COSTS.size}",
-            detail = if (bootsMax) "Max · ${Upgrades.moveSpeed(upgrades.bootsLevel)} speed"
-            else "Speed ${Upgrades.moveSpeed(upgrades.bootsLevel)} → ${Upgrades.moveSpeed(upgrades.bootsLevel + 1)}",
-            buyLabel = if (bootsMax) null else "${Upgrades.BOOTS_COSTS[upgrades.bootsLevel]} c",
-            canBuy = !bootsMax && coins >= Upgrades.BOOTS_COSTS[upgrades.bootsLevel],
-            onBuy = { game.enqueue(GameState.Command.BuyBoots) },
-        )
-        UpgradeDivider()
-
-        val packMax = upgrades.backpackLevel >= Upgrades.BACKPACK_COSTS.size
-        UpgradeRow(
-            title = "Backpack — Lv ${upgrades.backpackLevel}/${Upgrades.BACKPACK_COSTS.size}",
-            detail = if (packMax) "Max · carries ${Upgrades.BACKPACK_CAPACITIES[upgrades.backpackLevel]}"
-            else "Carries ${Upgrades.BACKPACK_CAPACITIES[upgrades.backpackLevel]} → ${Upgrades.BACKPACK_CAPACITIES[upgrades.backpackLevel + 1]}",
-            buyLabel = if (packMax) null else "${Upgrades.BACKPACK_COSTS[upgrades.backpackLevel]} c",
-            canBuy = !packMax && coins >= Upgrades.BACKPACK_COSTS[upgrades.backpackLevel],
-            onBuy = { game.enqueue(GameState.Command.BuyBackpack) },
-        )
-
-        if (!binOwned) {
-            UpgradeDivider()
+    SheetShell("Upgrades", onClose) {
+        var lastCategory = ""
+        for (u in upgrades) {
+            if (u.category != lastCategory) {
+                if (lastCategory.isNotEmpty()) UpgradeDivider()
+                SectionHeader(u.category)
+                lastCategory = u.category
+            }
+            val maxed = u.level >= u.maxLevel
             UpgradeRow(
-                title = "Storage Bin",
-                detail = "Bank ore at the camp; it still sells with you.",
-                buyLabel = "${Buildings.BIN_COST} c",
-                canBuy = coins >= Buildings.BIN_COST,
-                onBuy = { game.enqueue(GameState.Command.BuyBin) },
+                title = "${u.label} — Lv ${u.level}/${u.maxLevel}",
+                detail = u.effect,
+                buyLabel = if (maxed) null else "${u.cost} c",
+                canBuy = !maxed && coins >= u.cost,
+                onBuy = { game.enqueue(GameState.Command.BuyUpgrade(u.type)) },
             )
+            Spacer(Modifier.height(4.dp))
         }
-        UpgradeDivider()
-        val minerMax = miners.count >= miners.max
-        UpgradeRow(
-            title = "Hire Miner — ${miners.count}/${miners.max}",
-            detail = if (minerMax) "Full crew · they mine while you're away"
-            else "Works the valley and hauls to your stockpile",
-            buyLabel = if (minerMax) null else "${miners.nextCost} c",
-            canBuy = !minerMax && coins >= miners.nextCost,
-            onBuy = { game.enqueue(GameState.Command.HireMiner) },
-        )
         Spacer(Modifier.height(8.dp))
     }
 }
@@ -134,19 +96,112 @@ private fun UpgradeRow(title: String, detail: String, buyLabel: String?, canBuy:
         }
         if (buyLabel != null) {
             Spacer(Modifier.width(10.dp))
-            // v2.2 — hold the button and it keeps buying (M45).
+            // Hold the button and it keeps buying (M45 of the prototype).
             HoldRepeatChip(buyLabel, canBuy) { onBuy() }
         }
     }
 }
 
-// ---- Orders (v2.2) ---------------------------------------------------------
+// ---- Crew ------------------------------------------------------------------
 
-/**
- * The market's order board: customers ask for a specific good and wait.
- * Orders fill BY SELLING — there is no delivery chore, and ignoring one
- * costs nothing but the bounty.
- */
+@Composable
+fun BoxScope.CrewSheet(game: GameState, crew: GameState.CrewSnapshot, coins: Int, onClose: () -> Unit) {
+    SheetShell("The Crew", onClose) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            BasicText(
+                "Wages ${crew.wagePerMin} c/min",
+                style = TextStyle(color = Color(UiColors.COIN_TEXT), fontSize = 14.sp, fontWeight = FontWeight.Bold),
+            )
+            Spacer(Modifier.width(12.dp))
+            BasicText(
+                "hands ×${"%.2f".format(crew.crewSpeedMul)}",
+                style = TextStyle(color = Color(UiColors.DIM), fontSize = 12.sp),
+            )
+        }
+        if (crew.wagesUnpaid) {
+            Spacer(Modifier.height(4.dp))
+            BasicText(
+                "Wages unpaid — the crew has downed tools until the next payroll clears.",
+                style = TextStyle(color = Color(UiColors.WARN), fontSize = 12.sp, fontWeight = FontWeight.Bold),
+            )
+        }
+        Spacer(Modifier.height(10.dp))
+
+        if (crew.members.isNotEmpty()) {
+            SectionHeader("On the roster")
+            for (m in crew.members) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .background(Color(UiColors.PANEL_RAISED), RoundedCornerShape(10.dp))
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        BasicText(
+                            m.role.label,
+                            style = TextStyle(
+                                color = Color(if (m.paused || crew.wagesUnpaid) UiColors.DIM else UiColors.HEADER),
+                                fontSize = 14.sp, fontWeight = FontWeight.Bold,
+                            ),
+                        )
+                        BasicText(
+                            if (m.paused || crew.wagesUnpaid) "downed tools" else m.role.blurb,
+                            style = TextStyle(color = Color(UiColors.DIM), fontSize = 11.sp),
+                        )
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    ActionChip("Let go", true, danger = true) {
+                        game.enqueue(GameState.Command.FireWorker(m.index))
+                    }
+                }
+                Spacer(Modifier.height(6.dp))
+            }
+        }
+
+        SectionHeader("Hire")
+        for (o in crew.hireOptions) {
+            val locked = o.lockedReason != null
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .background(Color(UiColors.PANEL_RAISED), RoundedCornerShape(10.dp))
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        BasicText(
+                            o.role.label,
+                            style = TextStyle(color = Color(UiColors.HEADER), fontSize = 14.sp, fontWeight = FontWeight.Bold),
+                        )
+                        if (o.hired) {
+                            Spacer(Modifier.width(6.dp))
+                            BasicText("✓ hired", style = TextStyle(color = Color(UiColors.GOOD), fontSize = 11.sp, fontWeight = FontWeight.Bold))
+                        }
+                    }
+                    BasicText(o.role.blurb, style = TextStyle(color = Color(UiColors.TEXT), fontSize = 11.sp))
+                    BasicText(
+                        if (locked) "🔒 ${o.lockedReason}"
+                        else "${o.role.speed} speed · carries ${o.role.carry} · ${o.wage} c/min",
+                        style = TextStyle(color = Color(if (locked) UiColors.DIM else UiColors.DIM), fontSize = 11.sp),
+                    )
+                }
+                Spacer(Modifier.width(8.dp))
+                if (!locked) {
+                    HoldRepeatChip("${o.cost} c", coins >= o.cost) {
+                        game.enqueue(GameState.Command.HireWorker(o.role))
+                    }
+                }
+            }
+            Spacer(Modifier.height(6.dp))
+        }
+        Spacer(Modifier.height(8.dp))
+    }
+}
+
+// ---- Orders ------------------------------------------------------------------
+
 @Composable
 fun BoxScope.OrdersSheet(orders: GameState.OrdersSnapshot, onClose: () -> Unit) {
     SheetShell("Market Orders", onClose) {
@@ -157,12 +212,12 @@ fun BoxScope.OrdersSheet(orders: GameState.OrdersSnapshot, onClose: () -> Unit) 
             )
         } else if (orders.orders.isEmpty()) {
             BasicText(
-                "No one is waiting right now. Keep crafting — a customer walks in off the south road every so often.",
+                "No one is waiting right now. Keep crafting — a customer walks in every so often, and keeps the market's hours.",
                 style = TextStyle(color = Color(UiColors.TEXT), fontSize = 13.sp),
             )
         } else {
             BasicText(
-                "Anything that reaches the market counts — carried or banked. Ignore an order and it simply lapses.",
+                "Anything that reaches the market counts — your carry, the Merchant's cart, or the overnight shift. Ignore an order and it simply lapses.",
                 style = TextStyle(color = Color(UiColors.DIM), fontSize = 12.sp),
             )
             Spacer(Modifier.height(10.dp))
@@ -211,28 +266,77 @@ private fun OrderCard(o: GameState.OrderSnapshot) {
     }
 }
 
-// ---- Town (v2.2) ---------------------------------------------------------------
+// ---- Town ---------------------------------------------------------------------
 
 /** The build-the-village sheet: one press quotes the whole bill. */
 @Composable
-fun BoxScope.TownSheet(game: GameState, town: GameState.TownSnapshot, coins: Int, onClose: () -> Unit) {
+fun BoxScope.TownSheet(
+    game: GameState,
+    town: GameState.TownSnapshot,
+    materials: GameState.MaterialsSnapshot,
+    coins: Int,
+    onClose: () -> Unit,
+) {
     SheetShell("The Village", onClose) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             BasicText("Renown ${town.renown}", style = TextStyle(color = Color(UiColors.COIN_TEXT), fontSize = 14.sp, fontWeight = FontWeight.Bold))
             Spacer(Modifier.width(14.dp))
-            BasicText("Prestige ${town.prestige}", style = TextStyle(color = Color(UiColors.XP), fontSize = 14.sp, fontWeight = FontWeight.Bold))
+            BasicText("Prestige ${town.prestige}/172", style = TextStyle(color = Color(UiColors.XP), fontSize = 14.sp, fontWeight = FontWeight.Bold))
             Spacer(Modifier.weight(1f))
             BasicText(town.wellLabel, style = TextStyle(color = Color(UiColors.DIM), fontSize = 12.sp))
         }
-        BasicText(
-            if (town.residents > 0) "${town.residents} townsfolk live here now" else "Build homes and households will move in.",
-            style = TextStyle(color = Color(UiColors.DIM), fontSize = 12.sp),
-        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            BasicText(
+                if (town.residents > 0) "${town.residents} townsfolk live here now" else "Build homes and households will move in.",
+                style = TextStyle(color = Color(UiColors.DIM), fontSize = 12.sp),
+            )
+            Spacer(Modifier.weight(1f))
+            BasicText(
+                "water power ${town.powerDraw}/${town.powerGen}",
+                style = TextStyle(color = Color(if (town.powerDraw > town.powerGen) UiColors.WARN else UiColors.DIM), fontSize = 12.sp),
+            )
+        }
         Spacer(Modifier.height(10.dp))
         for (s in town.slots) {
-            SlotCard(s, coins) { game.enqueue(GameState.Command.BuildSlot(s.index)) }
+            SlotCard(s, coins, materials) { game.enqueue(GameState.Command.BuildSlot(s.index)) }
             Spacer(Modifier.height(8.dp))
         }
+
+        UpgradeDivider()
+        SectionHeader("Supply yard — materials")
+        BasicText(
+            "Coins buy materials outright; the sawmill can also cut planks from timber.",
+            style = TextStyle(color = Color(UiColors.DIM), fontSize = 12.sp),
+        )
+        Spacer(Modifier.height(6.dp))
+        for (m in materials.materials) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .background(Color(UiColors.PANEL_RAISED), RoundedCornerShape(10.dp))
+                    .padding(horizontal = 12.dp, vertical = 7.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    BasicText(
+                        "${m.material.label.replaceFirstChar { it.uppercase() }} — ${m.count} in the yard",
+                        style = TextStyle(color = Color(UiColors.HEADER), fontSize = 13.sp, fontWeight = FontWeight.Bold),
+                    )
+                }
+                if (m.unlocked) {
+                    HoldRepeatChip("${m.price} c", coins >= m.price) {
+                        game.enqueue(GameState.Command.BuyMaterial(m.material))
+                    }
+                } else {
+                    BasicText(
+                        "🔒 ${m.renownReq} renown",
+                        style = TextStyle(color = Color(UiColors.DIM), fontSize = 11.sp),
+                    )
+                }
+            }
+            Spacer(Modifier.height(5.dp))
+        }
+
         if (town.boons.isNotEmpty()) {
             UpgradeDivider()
             BasicText("Village boons", style = TextStyle(color = Color(UiColors.HEADER), fontSize = 14.sp, fontWeight = FontWeight.Bold))
@@ -246,7 +350,7 @@ fun BoxScope.TownSheet(game: GameState, town: GameState.TownSnapshot, coins: Int
 }
 
 @Composable
-private fun SlotCard(s: GameState.SlotSnapshot, coins: Int, onBuild: () -> Unit) {
+private fun SlotCard(s: GameState.SlotSnapshot, coins: Int, materials: GameState.MaterialsSnapshot, onBuild: () -> Unit) {
     Column(
         Modifier
             .fillMaxWidth()
@@ -260,8 +364,8 @@ private fun SlotCard(s: GameState.SlotSnapshot, coins: Int, onBuild: () -> Unit)
             }
             when {
                 s.complete -> BasicText("✓", style = TextStyle(color = Color(UiColors.GOOD), fontSize = 16.sp, fontWeight = FontWeight.Bold))
-                !s.renownMet -> BasicText(
-                    "🔒 ${s.renownReq} renown",
+                !s.gatesMet -> BasicText(
+                    "🔒 ${s.renownReq} renown · ${s.prestigeReq} prestige",
                     style = TextStyle(color = Color(UiColors.DIM), fontSize = 11.sp),
                 )
                 else -> HoldRepeatChip("${s.bill} c", s.affordable) { onBuild() }
@@ -271,9 +375,12 @@ private fun SlotCard(s: GameState.SlotSnapshot, coins: Int, onBuild: () -> Unit)
             if (s.suppliesLine.isNotEmpty()) {
                 Spacer(Modifier.height(4.dp))
                 BasicText(
-                    "bill covers ${s.suppliesLine}",
+                    "bill covers ${s.suppliesLine} (bought with one press)",
                     style = TextStyle(color = Color(UiColors.DIM), fontSize = 11.sp),
                 )
+            }
+            if (s.missingLine.isNotEmpty()) {
+                BasicText(s.missingLine, style = TextStyle(color = Color(UiColors.WARN), fontSize = 11.sp))
             }
             if (s.maxStage > 1) {
                 Spacer(Modifier.height(6.dp))
@@ -287,94 +394,164 @@ private fun SlotCard(s: GameState.SlotSnapshot, coins: Int, onBuild: () -> Unit)
     }
 }
 
-// ---- Forge -----------------------------------------------------------------
+// ---- Forge ---------------------------------------------------------------------
 
 @Composable
 fun BoxScope.ForgeSheet(
     game: GameState,
-    coins: Int,
     forge: GameState.ForgeSnapshot,
     ingots: GameState.IngotSnapshot,
     items: GameState.ItemSnapshot,
     carry: GameState.CarrySnapshot,
     stock: GameState.StockpileSnapshot,
+    sawmill: GameState.SawmillSnapshot,
     onClose: () -> Unit,
 ) {
     SheetShell("The Forge", onClose) {
-        if (!forge.furnaceOwned) {
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .background(Color(UiColors.PANEL_RAISED), RoundedCornerShape(12.dp))
-                    .padding(14.dp)
-            ) {
-                Column {
-                    BasicText(
-                        "Build your workshop",
-                        style = TextStyle(color = Color(UiColors.HEADER), fontSize = 16.sp, fontWeight = FontWeight.Bold),
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    BasicText(
-                        "A stone furnace and anvil. Smelt ore into ingots, hammer ingots into goods worth far more.",
-                        style = TextStyle(color = Color(UiColors.TEXT), fontSize = 12.sp),
-                    )
-                    Spacer(Modifier.height(10.dp))
-                    ActionChip(
-                        if (coins >= Buildings.FURNACE_COST) "Build · ${Buildings.FURNACE_COST} c" else "Need ${Buildings.FURNACE_COST} c",
-                        coins >= Buildings.FURNACE_COST,
-                    ) { game.enqueue(GameState.Command.BuyForge) }
-                }
-            }
-        } else {
-            FurnaceCard(forge)
-            Spacer(Modifier.height(12.dp))
+        FurnaceCard(forge.furnace, "Furnace — common fire" + if (forge.furnace2Unlocked) " (iron · copper)" else " (all ores)")
+        Spacer(Modifier.height(10.dp))
 
-            SectionHeader("Smelting — load the furnace")
-            val oreAvailable = { index: Int -> carry.oreCounts[index] + stock.oreCounts[index] }
-            for (metal in Metal.entries) {
-                val affordable = metal.recipe.all { (ore, need) -> oreAvailable(ore.ordinal) >= need }
-                val queueFull = forge.queue.size >= forge.queueCapacity
+        SectionHeader("Load the hopper — one ore at a time")
+        for (ore in Ore.entries) {
+            val available = carry.oreCounts[ore.ordinal] + stock.oreCounts[ore.ordinal]
+            val accepts = !forge.furnace2Unlocked || ore.pickLevel < 3
+            RecipeRow(
+                title = "${oreName(ore)} ore",
+                swatch = oreColor(ore),
+                detail = plainIngredient("${oreName(ore)} ore", available, 1),
+                meta = "smelt ${ore.smeltSeconds.toInt()}s · ingot sells ${Metal.entries.first { it.ore == ore }.sell} c",
+                action = "Load",
+                enabled = accepts && available >= 1 && forge.furnace.hopperTotal < forge.furnace.hopperCap,
+            ) { game.enqueue(GameState.Command.LoadHopper(ore, false)) }
+            Spacer(Modifier.height(6.dp))
+        }
+
+        if (forge.furnace2Unlocked) {
+            Spacer(Modifier.height(10.dp))
+            FurnaceCard(forge.furnace2, "Furnace II — precious fire (silver · gold · mythril · crystal)")
+            Spacer(Modifier.height(10.dp))
+            SectionHeader("Feed the precious fire")
+            for (ore in Ore.entries) {
+                if (ore.pickLevel < 3) continue
+                val available = carry.oreCounts[ore.ordinal] + stock.oreCounts[ore.ordinal]
                 RecipeRow(
-                    title = metal.label,
-                    swatch = metalColor(metal),
-                    detail = ingredientText(metal.recipe.map { (ore, need) ->
-                        Triple(oreName(ore), oreAvailable(ore.ordinal), need)
-                    }),
-                    meta = "smelt ${metal.smeltSeconds.toInt()}s · sells ${metal.sell} c",
+                    title = "${oreName(ore)} ore",
+                    swatch = oreColor(ore),
+                    detail = plainIngredient("${oreName(ore)} ore", available, 1),
+                    meta = "smelt ${ore.smeltSeconds.toInt()}s · ingot sells ${Metal.entries.first { it.ore == ore }.sell} c",
                     action = "Load",
-                    enabled = affordable && !queueFull,
-                ) { game.enqueue(GameState.Command.LoadFurnace(metal)) }
+                    enabled = available >= 1 && forge.furnace2.hopperTotal < forge.furnace2.hopperCap,
+                ) { game.enqueue(GameState.Command.LoadHopper(ore, true)) }
                 Spacer(Modifier.height(6.dp))
-            }
-
-            Spacer(Modifier.height(12.dp))
-            SectionHeader("Crafting — hammer at the anvil")
-            for (item in Item.entries) {
-                val parts = item.metals.map { (metal, need) ->
-                    Triple(metal.label, ingots.counts[metal.ordinal], need)
-                }.toMutableList()
-                if (item.crystal > 0) {
-                    parts.add(Triple("Crystal ore", oreAvailable(Ore.CRYSTAL.ordinal), item.crystal))
-                }
-                val affordable = parts.all { (_, have, need) -> have >= need }
-                RecipeRow(
-                    title = item.label,
-                    swatch = UiColors.EMBER,
-                    detail = ingredientText(parts),
-                    meta = "craft ${item.craftSeconds.toInt()}s · sells ${item.sell} c",
-                    action = "Craft",
-                    enabled = affordable,
-                ) { game.enqueue(GameState.Command.Craft(item)) }
-                Spacer(Modifier.height(6.dp))
-            }
-
-            if (ingots.total + items.total > 0) {
-                Spacer(Modifier.height(12.dp))
-                SectionHeader("Workshop stock")
-                StockStrip(ingots, items)
             }
         }
+
+        Spacer(Modifier.height(12.dp))
+        SectionHeader("Crafting — the anvil takes one ingot at a time")
+        AnvilLanes(forge)
         Spacer(Modifier.height(8.dp))
+        for (item in Item.entries) {
+            val have = ingots.counts[item.metal.ordinal]
+            RecipeRow(
+                title = item.label,
+                swatch = metalColor(item.metal),
+                detail = plainIngredient(item.metal.label, have, 1),
+                meta = "craft ${item.craftSeconds.toInt()}s · sells ${item.sell} c · +${com.villageforge.config.Town.renownWeight(item.sell)} renown",
+                action = "Craft",
+                enabled = have >= 1 && forge.queue.size < forge.queueCap,
+            ) { game.enqueue(GameState.Command.Craft(item)) }
+            Spacer(Modifier.height(6.dp))
+        }
+
+        Spacer(Modifier.height(10.dp))
+        SectionHeader("The sawmill")
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .background(Color(UiColors.PANEL_RAISED), RoundedCornerShape(10.dp))
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                BasicText(
+                    "Logs ${sawmill.hopper}/${sawmill.hopperCap} · planks cut ${sawmill.planks}",
+                    style = TextStyle(color = Color(UiColors.HEADER), fontSize = 13.sp, fontWeight = FontWeight.Bold),
+                )
+                BasicText(
+                    if (sawmill.sawing) "sawing — ${sawmill.remain.toInt()}s a plank" else "idle — fell timber and feed the saw",
+                    style = TextStyle(color = Color(UiColors.DIM), fontSize = 11.sp),
+                )
+            }
+            BasicText(
+                "${carry.timber} timber carried",
+                style = TextStyle(color = Color(UiColors.TEXT), fontSize = 12.sp),
+            )
+        }
+
+        if (ingots.total + items.total > 0) {
+            Spacer(Modifier.height(12.dp))
+            SectionHeader("Workshop stock")
+            StockStrip(ingots, items)
+        }
+        Spacer(Modifier.height(8.dp))
+    }
+}
+
+@Composable
+private fun AnvilLanes(forge: GameState.ForgeSnapshot) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .background(Color(UiColors.PANEL_RAISED), RoundedCornerShape(12.dp))
+            .padding(horizontal = 12.dp, vertical = 10.dp)
+    ) {
+        LaneRow("Lane A — your anvil", forge.laneA)
+        if (forge.furnace2Unlocked || forge.laneB.item != null) {
+            Spacer(Modifier.height(6.dp))
+            LaneRow("Lane B — the Master Smith", forge.laneB)
+        }
+        Spacer(Modifier.height(6.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            // Queue slot dots.
+            Row {
+                repeat(forge.queueCap) { i ->
+                    val filled = i < forge.queue.size
+                    Box(
+                        Modifier
+                            .padding(horizontal = 2.dp)
+                            .size(10.dp)
+                            .background(Color(if (filled) metalColor(forge.queue[i].metal) else UiColors.PANEL_SUNK), CircleShape)
+                    )
+                }
+            }
+            Spacer(Modifier.weight(1f))
+            BasicText(
+                "twin-craft ${(forge.twinChance * 100).toInt()}%",
+                style = TextStyle(color = Color(UiColors.DIM), fontSize = 11.sp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun LaneRow(label: String, lane: GameState.LaneView) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(10.dp).background(Color(UiColors.EMBER), CircleShape))
+        Spacer(Modifier.width(8.dp))
+        BasicText(label, style = TextStyle(color = Color(UiColors.HEADER), fontSize = 13.sp, fontWeight = FontWeight.Bold))
+        Spacer(Modifier.weight(1f))
+        if (lane.item != null) {
+            BasicText(
+                "${lane.item.label} — ${"%.1f".format(lane.remain)}s",
+                style = TextStyle(color = Color(UiColors.TEXT), fontSize = 12.sp),
+            )
+        } else {
+            BasicText("idle", style = TextStyle(color = Color(UiColors.DIM), fontSize = 12.sp))
+        }
+    }
+    if (lane.item != null) {
+        Spacer(Modifier.height(4.dp))
+        ProgressBar(1f - lane.remain / lane.total.coerceAtLeast(0.01f), UiColors.EMBER)
     }
 }
 
@@ -387,24 +564,21 @@ private fun SectionHeader(label: String) {
     Spacer(Modifier.height(8.dp))
 }
 
-/** Coloured ingredient list: red where you are short. */
-private fun ingredientText(parts: List<Triple<String, Int, Int>>): AnnotatedString {
+/** Single-ingredient line: red where you are short. */
+private fun plainIngredient(label: String, have: Int, need: Int): AnnotatedString {
     val b = AnnotatedString.Builder()
-    parts.forEachIndexed { i, (label, have, need) ->
-        if (i > 0) b.append("  ·  ")
-        val ok = have >= need
-        b.pushStyle(SpanStyle(color = Color(if (ok) UiColors.TEXT else UiColors.WARN), fontWeight = if (ok) FontWeight.Normal else FontWeight.Bold))
-        b.append("$need $label")
-        b.pop()
-        b.pushStyle(SpanStyle(color = Color(UiColors.DIM), fontSize = 11.sp))
-        b.append(" ($have)")
-        b.pop()
-    }
+    val ok = have >= need
+    b.pushStyle(SpanStyle(color = Color(if (ok) UiColors.TEXT else UiColors.WARN), fontWeight = if (ok) FontWeight.Normal else FontWeight.Bold))
+    b.append("$need $label")
+    b.pop()
+    b.pushStyle(SpanStyle(color = Color(UiColors.DIM), fontSize = 11.sp))
+    b.append(" ($have)")
+    b.pop()
     return b.toAnnotatedString()
 }
 
 @Composable
-private fun FurnaceCard(forge: GameState.ForgeSnapshot) {
+private fun FurnaceCard(furnace: GameState.FurnaceView, title: String) {
     Box(
         Modifier
             .fillMaxWidth()
@@ -416,38 +590,32 @@ private fun FurnaceCard(forge: GameState.ForgeSnapshot) {
                 Box(Modifier.size(10.dp).background(Color(UiColors.EMBER), CircleShape))
                 Spacer(Modifier.width(8.dp))
                 BasicText(
-                    "Furnace",
-                    style = TextStyle(color = Color(UiColors.HEADER), fontSize = 15.sp, fontWeight = FontWeight.Bold),
+                    title,
+                    style = TextStyle(color = Color(UiColors.HEADER), fontSize = 14.sp, fontWeight = FontWeight.Bold),
                 )
                 Spacer(Modifier.weight(1f))
-                // Queue slot dots.
-                Row {
-                    repeat(forge.queueCapacity) { i ->
-                        val filled = i < forge.queue.size
-                        Box(
-                            Modifier
-                                .padding(horizontal = 2.dp)
-                                .size(10.dp)
-                                .background(
-                                    Color(if (filled) metalColor(forge.queue[i].metal) else UiColors.PANEL_SUNK),
-                                    CircleShape,
-                                )
-                        )
-                    }
-                }
+                BasicText(
+                    "hopper ${furnace.hopperTotal}/${furnace.hopperCap}",
+                    style = TextStyle(color = Color(UiColors.DIM), fontSize = 12.sp),
+                )
             }
             Spacer(Modifier.height(8.dp))
-            val active = forge.queue.firstOrNull()
-            if (active != null) {
+            val smelting = furnace.smeltingOre
+            if (smelting != null) {
                 BasicText(
-                    "Smelting ${active.metal.label} — ${"%.1f".format(active.remain)}s",
+                    "Smelting ${oreName(smelting)} — ${"%.1f".format(furnace.smeltRemain)}s",
                     style = TextStyle(color = Color(UiColors.TEXT), fontSize = 13.sp),
                 )
                 Spacer(Modifier.height(6.dp))
-                ProgressBar(1f - active.remain / active.total.coerceAtLeast(0.01f), UiColors.EMBER)
+                ProgressBar(1f - furnace.smeltRemain / furnace.smeltTotal.coerceAtLeast(0.01f), UiColors.EMBER)
+            } else if (furnace.hopperTotal > 0) {
+                BasicText(
+                    "Hopper loaded — the fire takes the next ore",
+                    style = TextStyle(color = Color(UiColors.DIM), fontSize = 13.sp),
+                )
             } else {
                 BasicText(
-                    "Idle — queue up to ${forge.queueCapacity} batches",
+                    "Cold and empty — load ore from the yard",
                     style = TextStyle(color = Color(UiColors.DIM), fontSize = 13.sp),
                 )
             }
@@ -511,7 +679,7 @@ private fun StockStrip(ingots: GameState.IngotSnapshot, items: GameState.ItemSna
         if (items.total > 0) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 BasicText(
-                    "${items.total} finished goods",
+                    "${items.total}/${items.cap} finished goods",
                     style = TextStyle(color = Color(UiColors.TEXT), fontSize = 12.sp),
                 )
                 Spacer(Modifier.width(8.dp))
@@ -578,9 +746,12 @@ fun BoxScope.QuestSheet(
         StatRow("Coins earned", "${stats.coinsEarned} c")
         StatRow("Ingots smelted", "${stats.ingotsSmelted}")
         StatRow("Items crafted", "${stats.itemsCrafted}")
-        StatRow("Miners hired", "${stats.minersHired}")
+        StatRow("Crew on the roster", "${stats.crewSize}")
+        StatRow("Wages paid", "${stats.wagesPaid} c")
         StatRow("Time played", formatDuration(stats.playSeconds))
         UpgradeDivider()
+        StatRow("Timber felled", "${stats.timberFelled}")
+        StatRow("Planks sawn", "${stats.planksSawn}")
         StatRow("Renown earned", "${stats.renownEarned}")
         StatRow("Commissions filled", "${stats.commissionsFilled}")
         StatRow("Village prestige", "${stats.prestige}")
@@ -626,7 +797,7 @@ fun BoxScope.OfflineModal(report: GameState.OfflineReport, onDismiss: () -> Unit
         )
         Spacer(Modifier.height(4.dp))
         BasicText(
-            "${formatDuration(report.awaySeconds.toInt())} of village time",
+            "${formatDuration(report.awaySeconds.toInt())} of village time at half pace",
             style = TextStyle(color = Color(UiColors.DIM), fontSize = 12.sp),
         )
         Spacer(Modifier.height(12.dp))
@@ -640,7 +811,6 @@ fun BoxScope.OfflineModal(report: GameState.OfflineReport, onDismiss: () -> Unit
                 gainsSummary(report.oreGains) { oreName(Ore.entries[it]) },
                 style = TextStyle(color = Color(UiColors.DIM), fontSize = 12.sp),
             )
-            BasicText("→ added to your stockpile", style = TextStyle(color = Color(UiColors.GOOD), fontSize = 12.sp))
         }
         val ingotTotal = report.ingotGains.sum()
         if (ingotTotal > 0) {
@@ -652,6 +822,27 @@ fun BoxScope.OfflineModal(report: GameState.OfflineReport, onDismiss: () -> Unit
             BasicText(
                 gainsSummary(report.ingotGains) { Metal.entries[it].label },
                 style = TextStyle(color = Color(UiColors.DIM), fontSize = 12.sp),
+            )
+        }
+        if (report.itemGains > 0) {
+            Spacer(Modifier.height(8.dp))
+            BasicText(
+                "The forge hammered out ${report.itemGains} goods",
+                style = TextStyle(color = Color(UiColors.TEXT), fontSize = 13.sp),
+            )
+        }
+        if (report.plankGains > 0) {
+            Spacer(Modifier.height(8.dp))
+            BasicText(
+                "The sawmill cut ${report.plankGains} planks",
+                style = TextStyle(color = Color(UiColors.TEXT), fontSize = 13.sp),
+            )
+        }
+        if (report.coinGains > 0) {
+            Spacer(Modifier.height(8.dp))
+            BasicText(
+                "The Merchant sold +${report.coinGains} c of goods",
+                style = TextStyle(color = Color(UiColors.COIN_TEXT), fontSize = 13.sp, fontWeight = FontWeight.Bold),
             )
         }
         Spacer(Modifier.height(14.dp))
@@ -675,7 +866,7 @@ private fun gainsSummary(gains: List<Int>, name: (Int) -> String): String =
         .filterNotNull()
         .joinToString(" · ")
 
-// ---- Medals (v2.1) ---------------------------------------------------------
+// ---- Medals -----------------------------------------------------------------
 
 @Composable
 fun BoxScope.MedalsSheet(game: GameState, onClose: () -> Unit) {

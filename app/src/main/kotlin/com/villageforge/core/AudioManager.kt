@@ -96,7 +96,7 @@ class AudioManager {
         SfxId.BUY -> 0.18f; SfxId.DENIED -> 0.14f
         SfxId.SMELT -> 0.50f; SfxId.HAMMER -> 0.20f; SfxId.CRAFT -> 0.50f
         SfxId.QUEST -> 0.60f; SfxId.LEVELUP -> 0.60f; SfxId.ACHIEVE -> 0.80f
-        SfxId.ORDER -> 0.45f
+        SfxId.ORDER -> 0.45f; SfxId.WOOD_HIT -> 0.18f
     }
 
     private fun render(v: Voice): Float {
@@ -168,6 +168,11 @@ class AudioManager {
                 val a = sin(6.2831853f * 987.77f * t) * 0.22f * exp(-t * 6f)
                 val b = if (t > 0.18f) sin(6.2831853f * 1318.51f * (t - 0.18f)) * 0.18f * exp(-(t - 0.18f) * 6f) else 0f
                 a + b
+            }
+            SfxId.WOOD_HIT -> {
+                val d = exp(-t * 14f)
+                (sin(w * 430f * p) * 0.55f + sin(w * 860f * p) * 0.18f) * d +
+                    noise[(v.seed + v.phase) and 4095] * 0.18f * ((1f - t * 9f).coerceAtLeast(0f))
             }
         }
     }

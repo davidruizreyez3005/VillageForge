@@ -23,6 +23,9 @@ import androidx.lifecycle.lifecycleScope
 import com.villageforge.config.BuildInfo
 import com.villageforge.config.DayNight
 import com.villageforge.config.LightingProbe
+import com.villageforge.config.Ore
+import com.villageforge.config.Role
+import com.villageforge.config.UpgradeType
 import com.villageforge.config.WorldLayout
 import java.io.File
 import com.villageforge.core.AudioManager
@@ -42,7 +45,8 @@ import com.villageforge.systems.DayNightSystem
 import com.villageforge.systems.Economy
 import com.villageforge.systems.Forge
 import com.villageforge.systems.Mining
-import com.villageforge.systems.MinerSystem
+import com.villageforge.systems.CrewSystem
+import com.villageforge.systems.SawmillSystem
 import com.villageforge.systems.OfflineLogic
 import com.villageforge.systems.QuestSystem
 import com.villageforge.systems.TownsfolkSystem
@@ -75,7 +79,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var upgrades: UpgradeManager
     private lateinit var forge: Forge
     private lateinit var craft: Craft
-    private lateinit var miners: MinerSystem
+    private lateinit var crew: CrewSystem
     private lateinit var quests: QuestSystem
     private lateinit var achievements: AchievementSystem
     private lateinit var commissions: CommissionSystem
@@ -149,7 +153,7 @@ class MainActivity : ComponentActivity() {
         // Offline progress: hired miners keep digging, the furnace keeps pouring.
         if (loaded && save.lastPlayedEpochMs > 0L) {
             val elapsed = (System.currentTimeMillis() - save.lastPlayedEpochMs) / 1000f
-            game.offlineReport = OfflineLogic.apply(game, elapsed)
+            game.offlineReport = OfflineLogic.apply(game, elapsed, bus)
         }
         // Prime the UI flows with the loaded state before the HUD appears.
         game.publishUi()
@@ -161,7 +165,7 @@ class MainActivity : ComponentActivity() {
         host = FilamentHost()
         world = WorldRenderer(host.engine, game)
         host.bind(world)
-        world.onPickUpgraded(game.pickTier)
+        world.onPickUpgraded(game.pickLevel)
 
         mining = Mining(bus)
         economy = Economy(bus)
@@ -169,7 +173,7 @@ class MainActivity : ComponentActivity() {
         upgrades = UpgradeManager(bus)
         forge = Forge(bus)
         craft = Craft(bus)
-        miners = MinerSystem(bus)
+        crew = CrewSystem(bus, economy)
         quests = QuestSystem(bus)
         achievements = AchievementSystem(bus)
         commissions = CommissionSystem(bus)
@@ -420,10 +424,11 @@ class MainActivity : ComponentActivity() {
         if (uiPhase != UiPhase.GAME) return
         drainCommands()
         game.player.update(dt)
-        miners.update(game, dt)
+        crew.update(game, dt, craft)
         mining.update(game, dt)
         forge.update(game, dt)
-        craft.update(game, dt)
+        craft.update(game, dt, crew.blacksmithAtAnvil(game), crew.masterSmithAtAnvil(game))
+        SawmillSystem.update(game, dt)
         economy.update(game)
         buildings.update(game)
         DayNightSystem.update(game, dt)
@@ -444,7 +449,8 @@ class MainActivity : ComponentActivity() {
     private fun clearInteractionTargets() {
         mining.clearTarget(game.player)
         economy.clearTarget()
-        buildings.clearTarget()
+        buildings.clearDepositTarget()
+        buildings.clearWoodTarget()
         forge.clearLoadTarget()
         craft.clear(game)
     }
@@ -473,8 +479,12 @@ class MainActivity : ComponentActivity() {
                 is GameState.Command.Mine -> {
                     clearInteractionTargets()
                     val rock = game.rocks[command.rockIndex]
-                    if (rock.ore.requiredPick.ordinal > game.pickTier) {
-                        bus.notices.tryEmit(EventBus.Notice("Needs ${rock.ore.requiredPick.label}", EventBus.COLOR_WARN, rock.x, rock.z))
+                    if (!game.oreUnlocked(rock.ore)) {
+                        bus.notices.tryEmit(EventBus.Notice("Needs Pickaxe Quality Lv ${rock.ore.pickLevel}", EventBus.COLOR_WARN, rock.x, rock.z))
+                        continue
+                    }
+                    if (rock.field == com.villageforge.config.WorldLayout.MineField.EAST && !game.eastCutOpen) {
+                        bus.notices.tryEmit(EventBus.Notice("The East Cut is closed — hire the Pit Master", EventBus.COLOR_WARN, rock.x, rock.z))
                         continue
                     }
                     if (game.inventory.isFull) {
@@ -485,6 +495,18 @@ class MainActivity : ComponentActivity() {
                     walkTo(stand.first, stand.second)
                     mining.setTarget(command.rockIndex)
                 }
+                is GameState.Command.ChopTree -> {
+                    clearInteractionTargets()
+                    val tree = game.trees[command.treeIndex]
+                    if (!tree.alive) continue
+                    if (game.inventory.isFull) {
+                        bus.notices.tryEmit(EventBus.Notice("Carry full!", EventBus.COLOR_WARN, tree.x, tree.z))
+                        continue
+                    }
+                    val stand = standPoint(player.x, player.z, tree.x, tree.z, 1.5f)
+                    walkTo(stand.first, stand.second)
+                    mining.setTreeTarget(command.treeIndex)
+                }
                 is GameState.Command.Sell -> {
                     clearInteractionTargets()
                     val stand = standPoint(player.x, player.z, WorldLayout.TRADE_POST_X, WorldLayout.TRADE_POST_Z, 1.9f)
@@ -492,20 +514,31 @@ class MainActivity : ComponentActivity() {
                     economy.setTarget()
                 }
                 is GameState.Command.Deposit -> {
-                    if (!game.binOwned) continue
                     clearInteractionTargets()
-                    if (game.inventory.total == 0) {
-                        bus.notices.tryEmit(EventBus.Notice("Nothing to carry", EventBus.COLOR_WARN, player.x, player.z))
+                    if (game.inventory.oreCounts().all { it == 0 }) {
+                        bus.notices.tryEmit(EventBus.Notice("No ore to carry", EventBus.COLOR_WARN, player.x, player.z))
                         continue
                     }
                     val stand = standPoint(player.x, player.z, WorldLayout.BIN_X, WorldLayout.BIN_Z, 1.9f)
                     walkTo(stand.first, stand.second)
                     buildings.setDepositTarget()
                 }
-                is GameState.Command.LoadFurnace -> {
+                is GameState.Command.DepositWood -> {
                     clearInteractionTargets()
-                    if (forge.requestLoad(game, command.metal)) {
-                        val stand = standPoint(player.x, player.z, WorldLayout.FURNACE_X, WorldLayout.FURNACE_Z, 1.9f)
+                    if (game.inventory.timber == 0) {
+                        bus.notices.tryEmit(EventBus.Notice("No timber to feed", EventBus.COLOR_WARN, player.x, player.z))
+                        continue
+                    }
+                    val stand = standPoint(player.x, player.z, WorldLayout.SAWMILL_X, WorldLayout.SAWMILL_Z, 2.1f)
+                    walkTo(stand.first, stand.second)
+                    buildings.setWoodTarget()
+                }
+                is GameState.Command.LoadHopper -> {
+                    clearInteractionTargets()
+                    if (forge.requestLoad(game, command.ore, command.furnace2)) {
+                        val fx = if (command.furnace2) WorldLayout.FURNACE2_X else WorldLayout.FURNACE_X
+                        val fz = if (command.furnace2) WorldLayout.FURNACE2_Z else WorldLayout.FURNACE_Z
+                        val stand = standPoint(player.x, player.z, fx, fz, 1.9f)
                         walkTo(stand.first, stand.second)
                     }
                 }
@@ -514,18 +547,17 @@ class MainActivity : ComponentActivity() {
                     if (craft.request(game, command.item)) {
                         val stand = standPoint(player.x, player.z, WorldLayout.ANVIL_X, WorldLayout.ANVIL_Z, 1.7f)
                         walkTo(stand.first, stand.second)
+                        craft.playerHammering = true
                     }
                 }
-                is GameState.Command.BuyBin -> buildings.tryBuyBin(game)
-                is GameState.Command.BuildSlot -> village.tryBuild(game, command.slotIndex)
-                is GameState.Command.BuyForge -> buildings.tryBuyForge(game)
-                is GameState.Command.BuyPick -> {
-                    upgrades.tryBuyPick(game)
-                    world.onPickUpgraded(game.pickTier)
+                is GameState.Command.BuyUpgrade -> {
+                    upgrades.tryBuy(game, command.type)
+                    upgrades.syncBonuses(game)
                 }
-                is GameState.Command.BuyBoots -> upgrades.tryBuyBoots(game)
-                is GameState.Command.BuyBackpack -> upgrades.tryBuyBackpack(game)
-                is GameState.Command.HireMiner -> miners.hire(game)
+                is GameState.Command.HireWorker -> crew.hire(game, command.role)
+                is GameState.Command.FireWorker -> crew.fire(game, command.index)
+                is GameState.Command.BuyMaterial -> village.tryBuyMaterial(game, command.material)
+                is GameState.Command.BuildSlot -> village.tryBuild(game, command.slotIndex)
                 is GameState.Command.ToggleSound -> {
                     game.sfxEnabled = !game.sfxEnabled
                     audio.enabled = game.sfxEnabled

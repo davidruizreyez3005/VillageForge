@@ -2,13 +2,21 @@ package com.villageforge.entities
 
 import com.villageforge.config.Ore
 import com.villageforge.config.PlayerConfig
+import com.villageforge.config.Role
+import com.villageforge.config.Wood
 import com.villageforge.config.WorldLayout
 import kotlin.math.atan2
 import kotlin.math.hypot
 
 enum class AnimState { IDLE, WALK, SWING }
 
-class Rock(val index: Int, val ore: Ore, val x: Float, val z: Float) {
+class Rock(
+    val index: Int,
+    val ore: Ore,
+    val x: Float,
+    val z: Float,
+    val field: WorldLayout.MineField = WorldLayout.MineField.NORTH,
+) {
     var alive = true
     var hp = ore.rockHp
     var respawnTimer = 0f
@@ -16,9 +24,19 @@ class Rock(val index: Int, val ore: Ore, val x: Float, val z: Float) {
     fun reset() { alive = true; hp = ore.rockHp }
 }
 
+/** A valley tree: real timber now — 5 HP, 16s respawn. */
+class Tree(val index: Int, val x: Float, val z: Float) {
+    var alive = true
+    var hp = Wood.TREE_HP
+    var respawnTimer = 0f
+    fun fell() { alive = false; hp = 0; respawnTimer = Wood.TREE_RESPAWN_SECONDS.toFloat() }
+    fun reset() { alive = true; hp = Wood.TREE_HP }
+}
+
 /**
- * Shared walk/turn/pose state for the blacksmith and every hired miner.
- * The simulation moves it; the renderer interpolates prev/current each frame.
+ * Shared walk/turn/pose state for the blacksmith, every hired hand, the
+ * townsfolk, and the customers. The simulation moves it; the renderer
+ * interpolates prev/current each frame.
  */
 class Player {
     var x = WorldLayout.SPAWN_X
@@ -35,6 +53,8 @@ class Player {
     var faceTargetX = Float.NaN
     var faceTargetZ = Float.NaN
     var moveSpeedBonus = 0f
+    /** v3.0 — workers walk at their own role speed, not the player's. */
+    var speedOverride = Float.NaN
 
     private var targetX = Float.NaN
     private var targetZ = Float.NaN
@@ -67,7 +87,7 @@ class Player {
 
     /** Walks the direct line unless the zones call for trail waypoints. */
     fun setRoutedTarget(goalX: Float, goalZ: Float) {
-        setRoute(com.villageforge.config.WorldLayout.routeTo(x, z, goalX, goalZ), goalX, goalZ)
+        setRoute(WorldLayout.routeTo(x, z, goalX, goalZ), goalX, goalZ)
     }
 
     fun clearTarget() {
@@ -107,7 +127,7 @@ class Player {
         if (d < 0.05f) { targetX = Float.NaN; targetZ = Float.NaN; return }  // leg done; next tick continues the route
 
         faceToward(targetX, targetZ, dt)
-        val speed = PlayerConfig.MOVE_SPEED + moveSpeedBonus
+        val speed = if (!speedOverride.isNaN()) speedOverride else PlayerConfig.MOVE_SPEED + moveSpeedBonus
         val step = speed * dt
         if (step >= d) { x = targetX; z = targetZ; targetX = Float.NaN; targetZ = Float.NaN }
         else { x += dx / d * step; z += dz / d * step }
@@ -128,9 +148,11 @@ class Player {
 }
 
 /**
- * A hired miner. Movement/pose lives in [body]; the AI state machine driving
- * it (target rock, carrying, cooldown) lives in systems.MinerSystem.
+ * A hired hand. Movement/pose lives in [body]; the role AI driving it
+ * (targets, carrying, wages pause) lives in systems.CrewSystem.
  */
-class Miner(val index: Int, val styleIndex: Int) {
+class Worker(val index: Int, val role: Role, val styleIndex: Int) {
     val body = Player()
+    /** Downs tools while the payroll is short; resumed when wages clear. */
+    var paused = false
 }

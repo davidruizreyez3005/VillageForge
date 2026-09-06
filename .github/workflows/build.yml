@@ -33,13 +33,13 @@ jobs:
       - name: Stage APK
         run: |
           mkdir -p dist
-          cp app/build/outputs/apk/release/app-release.apk dist/VillageForge-v2.3.apk
+          cp app/build/outputs/apk/release/app-release.apk dist/VillageForge-v3.0.apk
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: village-forge-apk
-          path: dist/VillageForge-v2.3.apk
+          path: dist/VillageForge-v3.0.apk
           retention-days: 30
           if-no-files-found: error
 
@@ -69,7 +69,7 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           disable-animations: true
           script: |
-            adb install -r dist/VillageForge-v2.3.apk
+            adb install -r dist/VillageForge-v3.0.apk
             adb logcat -c
             # phase=game fast-forwards past the title screen so the smoke test
             # exercises the live 3D world and HUD directly.
@@ -115,16 +115,21 @@ jobs:
           name: village-forge-apk
           path: dist
 
-      - name: Publish to GitHub Releases (tag v2.3)
+      - name: Publish to GitHub Releases (tag v3.0)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create v2.3 dist/VillageForge-v2.3.apk \
-            --title "Village Forge v2.3 — The Reforged World Update" \
-            --notes "Nights you can actually see, torches to carry, and a world rebuilt out of curves instead of boxes:
+          gh release create v3.0 dist/VillageForge-v3.0.apk \
+            --title "Village Forge v3.0 — The Premium Port" \
+            --notes "The Premium Port — the Android build now runs the prototype's validated balance, number for number:
 
-          - BRIGHTER NIGHTS: night was still near-black on a phone screen at low brightness. The moonlit floor is raised across the board (brighter moonlight, more ambient fill, a lighter night sky) — night is now mood, not darkness
-          - CARRIED TORCHES: as dusk gathers, the blacksmith lights a torch (and the hired miners too). A warm, flickering point light travels with you through the evening, so low-brightness screens stay playable around the clock
-          - THE BOX LOOK IS GONE: the whole world was assembled from axis-aligned cubes. New curved primitive set — chamfered boxes, round columns, cones, domes, tapered towers, gems, faceted canopies, craggy cliffs, solid gable roofs, real windmill sails — reforging trees, cliffs, the furnace, the crystal hollow, the well ladder and every village building
-          - GROUND DETAIL: scattered grass tufts and pebble chips dress the valley floor; the furnace gets an arched glowing mouth; the windmill a round tapered tower with a dome cap and cloth sails" \
-            || gh release upload v2.3 dist/VillageForge-v2.3.apk --clobber
+        - THE SPEC ECONOMY: Iron/Copper/Silver/Gold/Mythril (Crystal kept as an Android-exclusive sixth tier in the Hollow), 1:1 smelting, ingots 2/4/7/12/28 coins, and the five prototype products. Raw ore no longer sells — the market buys ingots and finished goods only
+        - THE 16-UPGRADE TREE: Swift Boots through Crew Training with the prototype's exact costs, growth rates, and ore unlocks (Pickaxe Quality Lv 3/6/8 uncovers silver/gold/mythril, +4% double-ore per level)
+        - THE FULL CREW: Miner, Carrier, Smelter, Lumberjack, Blacksmith, Merchant, plus Master Smith, Master Smelter, Pit Master and five ore specialists — automation that never outpaces you. Wages are real: paid every 60 seconds, and an unpaid crew downs tools
+        - FURNACES AND LANES: hopper-and-tray smelting with the Furnace II precious/common tier split, the Great Bellows scale and the Bellows House x0.72, forge Lane A/Lane B with Twin Strike crits and the Trip Hammer's 0.4 tend floor
+        - THE WOOD CHAIN: fellable timber, the sawmill (16s a plank, x0.65 under any millrace), and planks that feed the build ladder
+        - THE EAST CUT: a second mine field that opens when the Pit Master is hired
+        - THE FULL 172-PRESTIGE LADDER: two millraces, the Bellows House and the Trip Hammer on a real power budget, the seven-tier well (Stone Well through the Millpond Fountain), four distinct house tiers (Cottage, Dormer, Longhouse, Merchant's House), spec commission gates and bounties, the supply yard's material shop, and the corrected boons (wages, crew speed, storage, offline, renown)
+        - SPEC RHYTHM: 480-second days with the 0.42 night floor and the Merchant's hours, offline progress at 50% throughput capped by Night Shift, the wheelbarrow capstone when Pack + Boots are maxed, and the fixed 45-degree/32-degree orthographic camera with double-tap recenter
+        - SAVE V5: a full sanitize pass clamps every count against the caps the save's own upgrades allow; v1-v4 villages keep their purse, renown, prestige, buildings and crew" \
+        || gh release upload v3.0 dist/VillageForge-v3.0.apk --clobber

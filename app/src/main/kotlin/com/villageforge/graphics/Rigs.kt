@@ -25,13 +25,14 @@ class RigStyle(
     val hasPick: Boolean,
     val scale: Float,
     val hasTorch: Boolean = false,
+    val hasBarrow: Boolean = false,
 ) {
     companion object {
         fun player() = RigStyle(
             Theme.PLAYER_SKIN, Theme.PLAYER_TUNIC, Theme.PLAYER_PANTS,
             Theme.PLAYER_HAIR, Theme.MINER_CAP, beard = true, apron = true,
             hasSack = true, hasPick = true, scale = 1f,
-            hasTorch = true,
+            hasTorch = true, hasBarrow = true,
         )
 
         fun miner(styleIndex: Int): RigStyle {
@@ -99,6 +100,10 @@ class HumanoidRig(
     private lateinit var torchFlameInstance: MaterialInstance
     /** v2.3 — 0 unlit, 1 full flame; ramps with dusk. */
     private var torchLevel = 0f
+    /** v3.0 — the wheelbarrow shows once Pack + Boots are both maxed. */
+    private var barrowVisible = false
+    private var barrowWoodInstance: MaterialInstance? = null
+    private var rigrowWheelInstance: MaterialInstance? = null
     private val flamePhase = Math.random().toFloat() * 6.28f
 
     init {
@@ -138,6 +143,12 @@ class HumanoidRig(
             rigEntities[TORCH_HANDLE] = assets.addRenderable(scene, assets.cyl6, wrap, identity)
             rigEntities[TORCH_FLAME] = assets.addRenderable(scene, assets.gem, torchFlameInstance, identity)
         }
+        if (style.hasBarrow) {
+            barrowWoodInstance = assets.material(Theme.TIMBER, Theme.ROUGHNESS_PROP)
+            rigEntities[BARROW_TUB] = assets.addRenderable(scene, assets.roundedBox, barrowWoodInstance!!, identity)
+            rigrowWheelInstance = assets.material(Theme.PLAYER_BOOT, Theme.ROUGHNESS_PROP)
+            rigEntities[BARROW_WHEEL] = assets.addRenderable(scene, assets.cyl8, rigrowWheelInstance!!, identity)
+        }
     }
 
     /** A bought pick visibly changes on the model. */
@@ -148,6 +159,9 @@ class HumanoidRig(
 
     /** v2.3 — dusk ramps the carried torch up from unlit to a full flame. */
     fun setTorchLevel(level: Float) { torchLevel = level }
+
+    /** v3.0 — the pack-and-boots capstone: a visible wheelbarrow. */
+    fun setBarrow(visible: Boolean) { barrowVisible = visible }
 
     /** v2.2 — hides the whole rig (zero scale, far below ground) when its walker is indoors. */
     fun park() {
@@ -252,6 +266,12 @@ class HumanoidRig(
             composeStatic(TORCH_FLAME, 0f, -2f, 0f, 0.001f, 0.001f, 0.001f)
         }
 
+        // v3.0 — the wheelbarrow trundles ahead of the smith when earned.
+        if (style.hasBarrow && barrowVisible) composeBarrow() else {
+            composeStatic(BARROW_TUB, 0f, -2f, 0f, 0.001f, 0.001f, 0.001f)
+            composeStatic(BARROW_WHEEL, 0f, -2f, 0f, 0.001f, 0.001f, 0.001f)
+        }
+
         // Tiny head sway sells the walk cycle.
         if (headSway != 0f) {
             Transforms.translation(temp, headSway * 0.15f, 0f, 0f)
@@ -327,6 +347,28 @@ class HumanoidRig(
         torchFlameInstance.setParameter("emissiveStrength", torchLevel * (3.4f + 2.6f * flick))
     }
 
+    /**
+     * v3.0 — the wheelbarrow: a wooden tub pushed ahead of the hips, one
+     * leg of the stand, and a rolling wheel in front.
+     */
+    private fun composeBarrow() {
+        // Tub rides in front of the body, tilted slightly.
+        Transforms.translation(temp, 0f, 0.42f, 0.62f)
+        Transforms.multiply(temp2, root, temp)
+        Transforms.rotationX(temp, 0.12f)
+        Transforms.multiply(joints[BARROW_TUB], temp2, temp)
+        Transforms.scale(temp, 0.62f, 0.34f, 0.80f)
+        Transforms.multiply(limbMatrices[BARROW_TUB], joints[BARROW_TUB], temp)
+
+        // The wheel: a thin 8-sided disc standing upright, ahead of the tub.
+        Transforms.translation(temp, 0f, 0.0f, 1.05f)
+        Transforms.multiply(temp2, root, temp)
+        Transforms.rotationZ(temp, 1.5708f)
+        Transforms.multiply(joints[BARROW_WHEEL], temp2, temp)
+        Transforms.scale(temp, 0.34f, 0.06f, 0.34f)
+        Transforms.multiply(limbMatrices[BARROW_WHEEL], joints[BARROW_WHEEL], temp)
+    }
+
     private fun composeStatic(index: Int, ox: Float, oy: Float, oz: Float, sx: Float, sy: Float, sz: Float) {
         Transforms.translation(temp, ox, oy, oz)
         Transforms.multiply(temp2, root, temp)
@@ -352,7 +394,7 @@ class HumanoidRig(
     private fun easeIn(t: Float) = t * t
 
     private companion object {
-        const val LIMB_COUNT = 17
+        const val LIMB_COUNT = 19
         const val TORSO = 0; const val APRON = 1; const val HEAD = 2
         const val HAIR = 3; const val BEARD = 4
         const val LEFT_LEG = 5; const val RIGHT_LEG = 6
@@ -361,6 +403,7 @@ class HumanoidRig(
         const val BELT = 11; const val PICK_HANDLE = 12; const val PICK_HEAD = 13
         const val SACK = 14
         const val TORCH_HANDLE = 15; const val TORCH_FLAME = 16
+        const val BARROW_TUB = 17; const val BARROW_WHEEL = 18
 
         const val HANDLE_LEN = 0.88f
         /** Fixed wrist grip: keeps the pick's arc in the swing plane. */

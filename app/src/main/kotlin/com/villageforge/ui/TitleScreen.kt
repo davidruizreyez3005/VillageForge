@@ -202,7 +202,7 @@ private fun SlotRow(
 private fun slotSummaryLine(s: SaveManager.SlotSummary): String {
     val played = formatDuration(s.playSeconds.toInt())
     val date = java.text.DateFormat.getDateInstance(java.text.DateFormat.SHORT).format(java.util.Date(s.lastPlayedMs))
-    return "${formatCount(s.coins)} · ${s.miners} miners · $played · $date"
+    return "${formatCount(s.coins)} · ${s.workers} crew · $played · $date"
 }
 
 private fun formatCount(value: Int): String = when {
