@@ -482,7 +482,10 @@ object WorldLayout {
     /** Playable ground spans used by tap projection and scatter. */
     const val PLAY_X_MIN = HOLLOW_X_MIN + 1f
     const val PLAY_X_MAX = VALLEY_WIDTH / 2f - 1f
-    const val PLAY_Z_MIN = minOf(CANYON_Z_MIN, HOLLOW_Z_MIN) + 1f
+    // NOTE: const initializers may not call functions (minOf broke CI in v3.1).
+    // The Hollow is the northern-most ground of all zones (its floor is -45;
+    // the canyon only reaches -38), so it defines the play floor.
+    const val PLAY_Z_MIN = HOLLOW_Z_MIN + 1f
     const val PLAY_Z_MAX = VALLEY_Z_MAX - 1f
 
     const val SPAWN_X = 0f
